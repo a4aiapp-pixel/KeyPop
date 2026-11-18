@@ -171,7 +171,7 @@ jobs:
             adb shell pm path com.aetherkeys.keyboard.stablev2 | grep -q package:
             adb install -r dist/KeyPop-RC45-universal-signed.apk
             adb shell pm path com.aetherkeys.keyboard.stablev2 | grep -q package:
-            adb shell am start -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p com.aetherkeys.keyboard.stablev2
+            adb shell am start -W -n com.aetherkeys.keyboard.stablev2/com.aetherkeys.keyboard.MainActivity -a android.intent.action.MAIN -c android.intent.category.LAUNCHER
             adb shell dumpsys activity activities | grep -E 'mResumedActivity|topResumedActivity|ResumedActivity' | grep -F 'com.aetherkeys.keyboard.MainActivity'
             adb install -r dist/KeyPop-RC45-x86_64-debug.apk
             adb install -r dist/KeyPop-RC45-androidTest.apk
