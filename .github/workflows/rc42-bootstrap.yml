@@ -37,13 +37,13 @@ jobs:
           test -s app/src/main/java/com/aetherkeys/keyboard/AetherImeService.kt
           test -s app/src/main/java/com/aetherkeys/keyboard/KeyPopAdaptiveServiceController.kt
           python3 - <<'PY'
-          import re
           from pathlib import Path
           config=Path("app/build.gradle.kts").read_text()
-          assert re.search(r'applicationIdSuffix\\s*=\\s*"\\.stablev2"',config), "Production package ID changed"
-          assert re.search(r'applicationIdSuffix\\s*=\\s*"\\.rc42preview"',config), "Preview package ID changed"
-          versions=re.findall(r'versionCode\\s*=\\s*(\\d+)',config)
-          assert len(versions)==1 and int(versions[0])>=100, "Upgrade versionCode must be >=100"
+          assert 'applicationIdSuffix = ".stablev2"' in config, "Production package ID changed"
+          assert 'applicationIdSuffix = ".rc42preview"' in config, "Preview package ID changed"
+          versions=[int(line.split("=",1)[1].strip()) for line in config.splitlines()
+                    if line.strip().startswith("versionCode =")]
+          assert len(versions)==1 and versions[0]>=100, "Upgrade versionCode must be >=100"
           assert 'KEYPOP_SIGNING_KEYSTORE_PATH' in config and 'keypopStable' in config
           print("Upgrade contract OK: fixed package IDs, monotonic version floor and stable signing")
           PY
