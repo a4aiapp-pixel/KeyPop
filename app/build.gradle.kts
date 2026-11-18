@@ -16,6 +16,13 @@ val signingKeyPassword = System.getenv("KEYPOP_SIGNING_KEY_PASSWORD")
 val hasSigning = listOf(signingFile, signingPassword, signingAlias, signingKeyPassword)
     .all { !it.isNullOrBlank() }
 
+// The same workflow name/path keeps an increasing GITHUB_RUN_NUMBER on every
+// new CI build. This automatically raises versionCode for sideload updates.
+// Local developer builds use the safe baseline and are not published.
+val stableBaseVersionCode = 100
+val actionsBuildIncrement = System.getenv("GITHUB_RUN_NUMBER")
+    ?.toIntOrNull()?.coerceIn(0, 1_000_000) ?: 0
+
 android {
     namespace = "com.aetherkeys.keyboard"
     compileSdk = 36
@@ -23,7 +30,7 @@ android {
         applicationId = "com.aetherkeys.keyboard"
         minSdk = 26
         targetSdk = 36
-        versionCode = 100
+        versionCode = stableBaseVersionCode + actionsBuildIncrement
         versionName = "1.0.42-rc42"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
