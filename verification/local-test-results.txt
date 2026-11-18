@@ -1,0 +1,4 @@
+RUN LOCAL CHECKS
+PASS: 73 RC42 local regression assertions
+URL integrity and phrase-prediction source policy tests included.
+Android emulator and live-host integration NOT tested.
