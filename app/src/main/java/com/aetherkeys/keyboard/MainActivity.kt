@@ -1,6 +1,7 @@
 package com.aetherkeys.keyboard
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color
@@ -162,6 +163,14 @@ class MainActivity : Activity() {
         toggle(controls,"Haptic feedback","Small vibration when a key is pressed","haptics",false)
         toggle(controls,"Keyboard sound","Subtle key click sound","sound",false)
         toggle(controls,"Clipboard history","Encrypted local text history; clear it on demand","history",true)
+        controls.addView(gap(8))
+        controls.addView(action("Personal Intelligence & privacy",true) {
+            KeyPopAdaptiveSettingsDialog.show(this) { callback ->
+                KeyPopAdaptiveServiceController.eraseDeviceMemory(applicationContext,callback)
+            }
+        })
+        controls.addView(gap(7))
+        controls.addView(action("Exclude apps from personal learning") { showExcludedAppsDialog() })
         addCard(root,controls)
 
         val tryCard=card()
@@ -185,6 +194,31 @@ class MainActivity : Activity() {
         root.addView(foot)
         root.addView(gap(15))
         setContentView(shell)
+    }
+
+
+    private fun showExcludedAppsDialog() {
+        val existing=prefs.getStringSet("adaptive_excluded_apps",emptySet()).orEmpty()
+        val input=EditText(this).apply {
+            setText(existing.sorted().joinToString("\\n"))
+            hint="com.example.app (one package per line)"
+            minLines=4
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Exclude apps from personal learning")
+            .setMessage("Enter app package IDs separated by a comma or a new line. " +
+                "Generic predictions can remain active; personal memories are excluded.")
+            .setView(input)
+            .setNegativeButton("Cancel",null)
+            .setPositiveButton("Save"){ _,_ ->
+                val names=input.text.toString().split(',', '\\n', ';')
+                    .map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+                val valid=names.all {
+                    Regex("[A-Za-z][A-Za-z0-9_]*(\\\\.[A-Za-z][A-Za-z0-9_]*)+").matches(it)
+                }
+                if(valid) prefs.edit().putStringSet("adaptive_excluded_apps",names).apply()
+                else android.widget.Toast.makeText(this,"Invalid app package ID",android.widget.Toast.LENGTH_SHORT).show()
+            }.show()
     }
 
     private fun slider(parent:LinearLayout,title:String,key:String,low:Int,high:Int,default:Int,unit:String) {
