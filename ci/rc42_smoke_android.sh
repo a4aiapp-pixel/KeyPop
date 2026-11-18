@@ -22,7 +22,7 @@ echo "[RC42] Run *all* Android instrumentation tests (URL editor, selection, etc
 adb install -r "$TEST"
 adb shell am instrument -w -r "$PKG.test/androidx.test.runner.AndroidJUnitRunner" \
     | tee instrumentation.txt
-grep -E 'OK \\([0-9]+ tests?\\)' instrumentation.txt
+grep -E 'OK [(][0-9]+ tests?[)]' instrumentation.txt
 if grep -Eq 'FAILURES!!!|INSTRUMENTATION_FAILED|shortMsg=|Process crashed' instrumentation.txt; then
     echo "Instrumentation failed; retaining detailed report" >&2
     exit 1
