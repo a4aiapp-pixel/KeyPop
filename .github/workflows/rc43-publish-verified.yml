@@ -1,0 +1,134 @@
+name: KeyPop RC43 publish verified signed candidates
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/rc43-publish-verified.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish-verified:
+    name: Publish only already-tested RC43 APKs and restored full source
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      VERIFIED_RUN_ID: '44278496757'
+      VERIFIED_SHA: f5be451ca81759e79b3b51340faeda08d6b6485b
+      PUBLIC_SIGNING_FINGERPRINT: 1ab47eb692c5f25d42cef11d6ae9993a31ae5fda157f7d7f41a400490db6e0a6
+      SOURCE_SHA256: 5fae64d3b3597b8b0f4ec926723fda4c8b1de41c706364c36e9fd77b993de70d
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Prove source checksum and immutable prior successful build and emulator gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$SOURCE_SHA256" KeyPop-RC43-RC40-Restored-RC42-Integrated-SOURCE.zip | sha256sum -c -
+          test "$(gh api "repos/$GH_REPO/actions/runs/$VERIFIED_RUN_ID" --jq '.head_sha')" = "$VERIFIED_SHA"
+          python3 - <<'PY'
+          import os, json, subprocess
+          raw=subprocess.check_output(['gh','api','--paginate',
+              f"repos/{os.environ['GH_REPO']}/actions/runs/{os.environ['VERIFIED_RUN_ID']}/jobs?per_page=100"],
+              text=True)
+          jobs=json.loads(raw)['jobs']
+          needed=[
+             'Full RC40 restoration, tests, permanent signing and Android upgrade',
+             'RC40 historical tests and actual RC42-to-RC43 upgrade'
+          ]
+          for name in needed:
+              matches=[j for j in jobs if j['name']==name and j['conclusion']=='success']
+              if len(matches)!=1: raise SystemExit('Required prior gate missing or failed: '+name)
+          print('Both independent Gradle/signature and emulator/in-place-upgrade gates verified')
+          PY
+          unzip -t KeyPop-RC43-RC40-Restored-RC42-Integrated-SOURCE.zip | tail -1
+      - uses: actions/download-artifact@v4
+        with:
+          name: KeyPop-RC43-signed-ARM64-universal
+          run-id: 44278496757
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: dist
+      - name: Independently verify immutable signer, package identity, version and variants
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          APKSIGNER="$(find "$SDK/build-tools" -mindepth 2 -maxdepth 2 -name apksigner | sort -V | tail -n 1)"
+          AAPT="$(find "$SDK/build-tools" -mindepth 2 -maxdepth 2 -name aapt | sort -V | tail -n 1)"
+          test -x "$APKSIGNER"
+          test -x "$AAPT"
+          test -s dist/KeyPop-RC43-arm64-v8a-signed.apk
+          test -s dist/KeyPop-RC43-universal-signed.apk
+          for APK in dist/*-signed.apk; do
+            "$APKSIGNER" verify "$APK"
+            python3 - "$APKSIGNER" "$APK" <<'PY'
+          import os,re,subprocess,sys
+          a,p=sys.argv[1:]
+          expected=os.environ['PUBLIC_SIGNING_FINGERPRINT']
+          lines=subprocess.check_output([a,'verify','--print-certs',p],text=True).splitlines()
+          fingerprints=[]
+          for line in lines:
+              if 'certificate' not in line.lower(): continue
+              m=re.search(r'SHA[- ]?256\s+digest\s*:\s*([0-9a-fA-F:\s]+)',line,re.I)
+              if m:
+                  digest=re.sub(r'[^0-9a-fA-F]','',m.group(1)).lower()
+                  if len(digest)==64:fingerprints.append(digest)
+          if fingerprints != [expected]: raise SystemExit('Signing certificate mismatch')
+          print('Permanent signing certificate validated for',p)
+          PY
+            "$AAPT" dump badging "$APK" > /tmp/keypop-badging.txt
+            grep -Fq "name='com.aetherkeys.keyboard.stablev2'" /tmp/keypop-badging.txt
+            python3 - <<'PY'
+          import re
+          s=open('/tmp/keypop-badging.txt').read()
+          m=re.search(r"versionCode='(\d+)'",s)
+          if not m or int(m.group(1))<10000:raise SystemExit('Invalid release versionCode')
+          print('Stable upgrade-compatible version',m.group(1))
+          PY
+          done
+      - name: Restore complete RC40-based source code to browsable Git branch
+        id: restore
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP=KeyPop-RC43-RC40-Restored-RC42-Integrated-SOURCE.zip
+          unzip -q "$ZIP"
+          python3 KeyPop-RC43-Source/ci/verify_rc43_source.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c feature/rc43-restored-combined-20261118
+          cp -a KeyPop-RC43-Source/app .
+          cp -a KeyPop-RC43-Source/docs .
+          cp KeyPop-RC43-Source/{build.gradle.kts,settings.gradle.kts,gradle.properties,README.md} .
+          cp KeyPop-RC43-Source/ci/verify_rc43_source.py ci/
+          git add app docs ci/verify_rc43_source.py build.gradle.kts settings.gradle.kts gradle.properties README.md
+          if [[ -d KeyPop-RC43-Source/verification ]]; then
+            cp -a KeyPop-RC43-Source/verification .
+            git add verification
+          fi
+          git commit -m 'restore: complete RC40 keyboard with RC42 intelligence and permanent signing'
+          git push origin HEAD:refs/heads/feature/rc43-restored-combined-20261118
+          echo "source_commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Publish signed ARM64 and Universal APKs to verified RC43 prerelease
+        shell: bash
+        env:
+          RESTORED_COMMIT: ${{ steps.restore.outputs.source_commit }}
+        run: |
+          set -euo pipefail
+          test "$RESTORED_COMMIT" != ""
+          TAG=v1.0.43-rc43-rc40-restored-stable-signed
+          gh release create "$TAG" \
+            dist/KeyPop-RC43-arm64-v8a-signed.apk \
+            dist/KeyPop-RC43-universal-signed.apk \
+            --target "$RESTORED_COMMIT" --prerelease \
+            --title 'KeyPop RC43 — Full RC40 restored plus RC42 intelligence' \
+            --notes 'Full RC40 source restored with RC42 adaptive intelligence and URL safety. SHA-256 verified source, permanent signing fingerprint validated on both APKs, unit tests + lint + instrumented emulator tests passed, including actual RC42-to-RC43 stablev2 in-place installation. Full project: feature/rc43-restored-combined-20261118. Legacy RC40 preview uses a different app identity and cannot be overwritten by the stablev2 APK.'
+          gh release view "$TAG" --json assets --jq '.assets[].name' | sort | tee /tmp/published-assets.txt
+          grep -Fxq KeyPop-RC43-arm64-v8a-signed.apk /tmp/published-assets.txt
+          grep -Fxq KeyPop-RC43-universal-signed.apk /tmp/published-assets.txt
