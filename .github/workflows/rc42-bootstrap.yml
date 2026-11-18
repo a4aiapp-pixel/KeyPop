@@ -96,6 +96,9 @@ jobs:
           target = pathlib.Path(os.environ['RUNNER_TEMP']) / 'keypop-release.jks'
           target.write_bytes(decoded)
           target.chmod(0o600)
+          # Mask all derived passwords before they reach subsequent Actions steps.
+          for key in sorted(allowed - {'KEYPOP_SIGNING_KEYSTORE_B64'}):
+              print('::add-mask::' + values[key])
           with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as handle:
               handle.write('KEYPOP_SIGNING_KEYSTORE_PATH=' + str(target) + '\n')
               for key in sorted(allowed - {'KEYPOP_SIGNING_KEYSTORE_B64'}):
