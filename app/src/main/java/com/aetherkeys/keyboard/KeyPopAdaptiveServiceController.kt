@@ -6,6 +6,7 @@ import android.os.Handler
 import android.os.Looper
 import android.view.inputmethod.EditorInfo
 import java.io.Closeable
+import java.lang.ref.WeakReference
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
 
@@ -14,6 +15,19 @@ import java.util.concurrent.atomic.AtomicLong
  * in the EXISTING 3 suggestion chips, with session/selection verification.
  * All disk work stays off the IME's UI thread. */
 class KeyPopAdaptiveServiceController(context: Context) : Closeable {
+    companion object {
+        @Volatile private var running: WeakReference<KeyPopAdaptiveServiceController>? = null
+        /** Erasure from Settings must also erase the live keyboard's in-memory model. */
+        fun eraseDeviceMemory(context: Context, callback: (Boolean) -> Unit) {
+            val active=running?.get()
+            if(active!=null) { active.eraseAll(callback);return }
+            val app=context.applicationContext
+            Thread {
+                val result=runCatching { KeyPopAdaptiveHistoryStore(app).erase() }.isSuccess
+                Handler(Looper.getMainLooper()).post { callback(result) }
+            }.start()
+        }
+    }
     private val appContext = context.applicationContext
     private val prefs = appContext.getSharedPreferences("keypop", Context.MODE_PRIVATE)
     private val model = KeyPopAdaptiveLanguageModel()
@@ -28,6 +42,7 @@ class KeyPopAdaptiveServiceController(context: Context) : Closeable {
         private set
 
     init {
+        running=WeakReference(this)
         executor.execute {
             runCatching {
                 val snap = store.load()
@@ -125,5 +140,10 @@ class KeyPopAdaptiveServiceController(context: Context) : Closeable {
         }
     }
 
-    override fun close() { closed = true; invalidateSession(); executor.shutdownNow() }
+    override fun close() {
+        closed = true
+        invalidateSession()
+        if(running?.get()===this)running=null
+        executor.shutdownNow()
+    }
 }
