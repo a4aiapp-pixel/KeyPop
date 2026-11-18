@@ -53,7 +53,9 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .github app docs verification build.gradle.kts settings.gradle.kts gradle.properties .gitignore README.md
+          # Workflow changes are deliberately committed separately by the GitHub connector.
+          # GITHUB_TOKEN does not have workflow-editing scope on this repository.
+          git add app docs verification build.gradle.kts settings.gradle.kts gradle.properties .gitignore README.md
           if ! git diff --cached --quiet; then
             git commit -m "chore(rc42): expand uploaded base and stage adaptive source overlay"
             git push origin "HEAD:feature/rc42-adaptive-intelligence-integrated-20261118"
