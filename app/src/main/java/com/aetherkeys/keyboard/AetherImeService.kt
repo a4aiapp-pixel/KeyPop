@@ -11,6 +11,8 @@ import android.media.AudioManager
 import android.os.Build
 import android.text.InputType
 import android.view.Gravity
+import android.view.KeyEvent
+import android.text.TextUtils
 import android.view.HapticFeedbackConstants
 import android.view.View
 import android.view.inputmethod.EditorInfo
@@ -32,6 +34,10 @@ class AetherImeService : InputMethodService() {
     private var clipsOpen=false
     private var compact=false
     private var current:LinearLayout?=null
+    private val adaptive by lazy { KeyPopAdaptiveServiceController(applicationContext) }
+    private var suggestionChips:List<Button> = emptyList()
+    private var displayedCandidates:List<KeyPopAdaptiveLanguageModel.Candidate> = emptyList()
+    private var editorEpoch=0L
     private val english=listOf(listOf("q","w","e","r","t","y","u","i","o","p"),
         listOf("a","s","d","f","g","h","j","k","l"),
         listOf("z","x","c","v","b","n","m"))
@@ -81,7 +87,36 @@ class AetherImeService : InputMethodService() {
     }
     override fun onStartInputView(info:EditorInfo?,restarting:Boolean) {
         super.onStartInputView(info,restarting)
+        editorEpoch++
+        adaptive.invalidateSession()
         draw()
+        requestAdaptivePrediction()
+    }
+
+    override fun onFinishInputView(finishingInput:Boolean) {
+        editorEpoch++
+        adaptive.invalidateSession()
+        displayedCandidates=emptyList()
+        suggestionChips=emptyList()
+        super.onFinishInputView(finishingInput)
+    }
+
+    override fun onUpdateSelection(oldSelStart:Int,oldSelEnd:Int,
+        newSelStart:Int,newSelEnd:Int,candidatesStart:Int,candidatesEnd:Int) {
+        super.onUpdateSelection(oldSelStart,oldSelEnd,newSelStart,newSelEnd,
+            candidatesStart,candidatesEnd)
+        if(oldSelStart!=newSelStart || oldSelEnd!=newSelEnd) {
+            adaptive.invalidateSession()
+            requestAdaptivePrediction()
+        }
+    }
+
+    override fun onDestroy() {
+        if(this::class.java!=null) {
+            // A lazy service controller may be initialized by the first view.
+            runCatching { adaptive.close() }
+        }
+        super.onDestroy()
     }
 
     private fun d(v:Int)=(v*resources.displayMetrics.density).toInt()
@@ -112,6 +147,8 @@ class AetherImeService : InputMethodService() {
             minWidth=0; minimumWidth=0; minHeight=0; minimumHeight=0
             setPadding(0,0,0,0)
             elevation=d(if(s.shape==2) 0 else 2).toFloat()
+            isFocusable=false
+            isFocusableInTouchMode=false
             setOnClickListener { tapFeedback(this); action() }
         }
     }
@@ -122,6 +159,8 @@ class AetherImeService : InputMethodService() {
             setTextColor(s.ink); minWidth=0; minimumWidth=0; minHeight=0; minimumHeight=0
             background=gradient(s.surface,s.background,11,if(s.outline) s.accent else null)
             setPadding(0,0,0,0)
+            isFocusable=false
+            isFocusableInTouchMode=false
             setOnClickListener { tapFeedback(this); onTap() }
         }
     }
@@ -142,11 +181,30 @@ class AetherImeService : InputMethodService() {
         topButton(if(symbols) "ABC" else "?#@",.82f) { symbols=!symbols;clipsOpen=false;draw() }
         topButton(if(compact) "↔" else "◫",.58f) { compact=!compact;draw() }
         topButton("◈",.55f) { prefs.edit().putInt("theme",(KeyPopSkins.index(this)+1)%15).apply();draw() }
+        topButton("★",.50f) { rememberCurrentPhrase() }
         topButton("⚙",.55f) {
             startActivity(Intent(this,MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         }
         root.addView(top)
+        suggestionChips=emptyList()
+        displayedCandidates=emptyList()
         if(clipsOpen) { drawClips(root); return }
+        val suggestions=LinearLayout(this).apply {
+            orientation=LinearLayout.HORIZONTAL
+            gravity=Gravity.CENTER_VERTICAL
+        }
+        suggestionChips=(0 until 3).map { index ->
+            chip(" ") { acceptAdaptiveCandidate(index) }.also { button ->
+                button.isEnabled=false
+                button.maxLines=1
+                button.ellipsize=TextUtils.TruncateAt.END
+                suggestions.addView(button,LinearLayout.LayoutParams(0,d(40),1f).apply {
+                    leftMargin=d(2);rightMargin=d(2)
+                })
+            }
+        }
+        root.addView(suggestions)
+        requestAdaptivePrediction()
         val title=TextView(this).apply {
             text=if(symbols) "SYMBOLS   •   TAP ABC TO RETURN"
                  else if(language==0) "✧  KEYPOP  •  TYPE YOUR WAY"
@@ -204,17 +262,32 @@ class AetherImeService : InputMethodService() {
     }
     private fun press(value:String) {
         when(value) {
-            "⌫" -> currentInputConnection?.deleteSurroundingText(1,0)
+            "⌫" -> {
+                val connection=currentInputConnection
+                val selected=runCatching { connection?.getSelectedText(0)?.isNotEmpty()==true }
+                    .getOrDefault(false)
+                if(selected) connection?.commitText("",1)
+                else if(connection?.deleteSurroundingTextInCodePoints(1,0)!=true) {
+                    if(connection?.deleteSurroundingText(1,0)!=true) {
+                        connection?.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN,KeyEvent.KEYCODE_DEL))
+                        connection?.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP,KeyEvent.KEYCODE_DEL))
+                    }
+                }
+            }
             "⇧" -> { if(language==0) shift=!shift; draw() }
             "SPACE" -> currentInputConnection?.commitText(" ",1)
             "🌐" -> cycleLanguage()
             "?123" -> { symbols=true;draw() }
             "ABC" -> { symbols=false;draw() }
             "↵" -> {
-                val action=(currentInputEditorInfo?.imeOptions ?: 0) and EditorInfo.IME_MASK_ACTION
-                if(action!=EditorInfo.IME_ACTION_NONE && action!=EditorInfo.IME_ACTION_UNSPECIFIED)
-                    currentInputConnection?.performEditorAction(action)
-                else currentInputConnection?.commitText("\n",1)
+                val info=currentInputEditorInfo
+                val action=(info?.imeOptions ?: 0) and EditorInfo.IME_MASK_ACTION
+                val whatsapp=info?.packageName in setOf("com.whatsapp","com.whatsapp.w4b")
+                val multiline=(info?.inputType ?: 0) and InputType.TYPE_TEXT_FLAG_MULTI_LINE!=0
+                if(whatsapp || multiline ||
+                    action in setOf(EditorInfo.IME_ACTION_NONE,EditorInfo.IME_ACTION_UNSPECIFIED))
+                    currentInputConnection?.commitText("\n",1)
+                else currentInputConnection?.performEditorAction(action)
             }
             else -> {
                 currentInputConnection?.commitText(
@@ -222,7 +295,129 @@ class AetherImeService : InputMethodService() {
                 if(shift && language==0) { shift=false;draw() }
             }
         }
+        requestAdaptivePrediction()
     }
+    private fun safeEditor():Boolean {
+        val info=currentInputEditorInfo ?: return false
+        val clazz=info.inputType and InputType.TYPE_MASK_CLASS
+        if(clazz!=InputType.TYPE_CLASS_TEXT)return false
+        val variation=info.inputType and InputType.TYPE_MASK_VARIATION
+        if(variation in setOf(InputType.TYPE_TEXT_VARIATION_PASSWORD,
+                InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD,
+                InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD,
+                InputType.TYPE_TEXT_VARIATION_URI,
+                InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS,
+                InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS))return false
+        return !symbols && !clipsOpen
+    }
+
+    private fun clearSuggestions() {
+        displayedCandidates=emptyList()
+        suggestionChips.forEach { chip -> chip.isEnabled=false;chip.text=" " }
+    }
+
+    private fun requestAdaptivePrediction() {
+        val chips=suggestionChips
+        if(chips.size!=3)return
+        if(!safeEditor()) { clearSuggestions();adaptive.invalidateSession();return }
+        val connection=currentInputConnection ?: run { clearSuggestions();return }
+        // InputConnection calls must be on the IME thread and restricted to
+        // an eligible field. Never inspect secure/number/URI editor contents.
+        val before=runCatching {
+            connection.getTextBeforeCursor(220,0)?.toString().orEmpty()
+        }.getOrDefault("")
+        val after=runCatching {
+            connection.getTextAfterCursor(48,0)?.toString().orEmpty()
+        }.getOrDefault("")
+        if(KeyPopUrlEditingPolicy.touchesUrlOrEmail(before,after) ||
+            runCatching { connection.getSelectedText(0)?.isNotEmpty()==true }
+                .getOrDefault(false)) {
+            clearSuggestions();adaptive.invalidateSession();return
+        }
+        val info=currentInputEditorInfo
+        val epoch=editorEpoch
+        val pkg=info?.packageName
+        clearSuggestions()
+        adaptive.predict(before,after,info,false) { candidates ->
+            if(epoch!=editorEpoch || !safeEditor() || currentInputEditorInfo?.packageName!=pkg ||
+                suggestionChips!==chips)return@predict
+            val live=currentInputConnection ?: return@predict
+            val liveBefore=runCatching {
+                live.getTextBeforeCursor(220,0)?.toString().orEmpty()
+            }.getOrDefault("")
+            val liveAfter=runCatching {
+                live.getTextAfterCursor(48,0)?.toString().orEmpty()
+            }.getOrDefault("")
+            if(liveBefore!=before || liveAfter!=after)return@predict
+            displayedCandidates=candidates.take(3)
+            chips.forEachIndexed { index, button ->
+                val c=displayedCandidates.getOrNull(index)
+                button.text=c?.display ?: " "
+                button.isEnabled=c!=null
+            }
+        }
+    }
+
+    private fun acceptAdaptiveCandidate(index:Int) {
+        val chosen=displayedCandidates.getOrNull(index) ?:return
+        if(!safeEditor())return
+        val connection=currentInputConnection ?:return
+        if(runCatching { connection.getSelectedText(0)?.isNotEmpty()==true }
+                .getOrDefault(false))return
+        val before=runCatching {
+            connection.getTextBeforeCursor(220,0)?.toString().orEmpty()
+        }.getOrDefault("")
+        val after=runCatching {
+            connection.getTextAfterCursor(48,0)?.toString().orEmpty()
+        }.getOrDefault("")
+        val plan=KeyPopAdaptiveCandidatePlanner.makePlan(before,after,chosen.replacement)
+            ?:return
+        if(!before.endsWith(plan.expectedPrefix) || !after.startsWith(plan.expectedSuffix))
+            return
+        val trailing=if(after.isEmpty())" "
+            else if(after.first().isWhitespace() || after.first() in setOf('.',',',';',':','!','?'))
+                "" else " "
+        val replacement=plan.insert+trailing
+        connection.beginBatchEdit()
+        var success=false
+        try {
+            val deleted=plan.replaceBeforeChars==0 ||
+                connection.deleteSurroundingText(plan.replaceBeforeChars,0)
+            success=deleted && connection.commitText(replacement,1)
+        } finally { connection.endBatchEdit() }
+        if(success) {
+            val word=chosen.replacement.takeWhile { !it.isWhitespace() }
+            adaptive.learnAcceptedWord(word,currentInputEditorInfo,false)
+            displayedCandidates=emptyList()
+            requestAdaptivePrediction()
+        }
+    }
+
+    private fun rememberCurrentPhrase() {
+        if(!prefs.getBoolean("adaptive_finished_phrases",false)) {
+            Toast.makeText(this,"Enable finished-phrase memory in Personal Intelligence settings first",
+                Toast.LENGTH_SHORT).show()
+            return
+        }
+        if(!safeEditor()) {
+            Toast.makeText(this,"Phrase memory is unavailable in this field",
+                Toast.LENGTH_SHORT).show()
+            return
+        }
+        val connection=currentInputConnection ?:return
+        val source=runCatching {
+            connection.getTextBeforeCursor(220,0)?.toString().orEmpty()
+        }.getOrDefault("")
+        if(source.length < 12 || KeyPopUrlEditingPolicy.touchesUrlOrEmail(source)) {
+            Toast.makeText(this,"Enter a complete, non-URL phrase before saving",
+                Toast.LENGTH_SHORT).show()
+            return
+        }
+        adaptive.learnConfirmedPhrase(source,currentInputEditorInfo,false)
+        Toast.makeText(this,"Phrase learning requested (stored only if eligible)",
+            Toast.LENGTH_SHORT).show()
+    }
+
     private fun cycleLanguage() {
         language=(language+1)%3
         prefs.edit().putInt("language",language).apply()
