@@ -52,14 +52,16 @@
             android:windowSoftInputMode="adjustResize"/>
         <service android:name=".KeyPopModelDownloadService"
             android:exported="false" android:foregroundServiceType="dataSync"/>
-        <activity android:name=".MainActivity" android:exported="false"/>
-        <activity android:name=".KeyPopHomeActivity" android:exported="true"
-            android:windowSoftInputMode="adjustResize">
+        <!-- Open the complete settings dashboard directly from the app icon.
+             The original setup/test screen remains accessible under Keyboard Setup. -->
+        <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <activity android:name=".KeyPopHomeActivity" android:exported="false"
+            android:windowSoftInputMode="adjustResize"/>
         <service android:name=".AetherImeService" android:permission="android.permission.BIND_INPUT_METHOD" android:exported="true" android:label="KeyPop RC44 Keyboard">
             <intent-filter><action android:name="android.view.InputMethod"/></intent-filter>
             <meta-data android:name="android.view.im" android:resource="@xml/method"/>
