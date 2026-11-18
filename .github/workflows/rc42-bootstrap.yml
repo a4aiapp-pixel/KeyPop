@@ -135,12 +135,33 @@ jobs:
           test -x "$APKSIGNER"
           for APK in app/build/outputs/apk/release/app-arm64-v8a-release.apk app/build/outputs/apk/release/app-universal-release.apk; do
             "$APKSIGNER" verify --verbose "$APK"
-            FOUND="$("$APKSIGNER" verify --print-certs "$APK" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | tr 'A-F' 'a-f' | tr -d '[:space:]')"
-            test -n "$FOUND"
-            if [[ "$FOUND" != "$EXPECTED" ]]; then
-              echo "::error::APK certificate does not match pinned KeyPop stable signing identity"
-              exit 1
-            fi
+            python3 - "$APKSIGNER" "$APK" "$EXPECTED" <<'PY'
+          import re
+          import subprocess
+          import sys
+          apksigner, apk, expected = sys.argv[1:]
+          lines = subprocess.check_output([apksigner, "verify", "--print-certs", apk], text=True).splitlines()
+          digests = []
+          for line in lines:
+              if "certificate" not in line.lower():
+                  continue
+              match = re.search(r"SHA[- ]?256\\s+digest\\s*:\\s*([0-9a-fA-F:\\s]+)", line, flags=re.I)
+              if match:
+                  value = re.sub(r"[^0-9a-fA-F]", "", match.group(1)).lower()
+                  if len(value) == 64:
+                      digests.append(value)
+          if len(expected) != 64 or not re.fullmatch(r"[0-9a-f]{64}", expected.lower()):
+              raise SystemExit("Pinned public signing fingerprint has invalid format")
+          if len(digests) != 1:
+              for line in lines:
+                  if "certificate" in line.lower():
+                      print("Certificate metadata: " + line[:180])
+              raise SystemExit("Unable to extract exactly one signer certificate SHA-256 fingerprint")
+          found = digests[0]
+          print("Verified signed APK certificate fingerprint:", found)
+          if found != expected.lower():
+              raise SystemExit("APK signer does not match pinned permanent KeyPop certificate")
+          PY
           done
           echo "Both release APKs share the pinned permanent KeyPop signing certificate"
       - name: Stage engineering APKs
