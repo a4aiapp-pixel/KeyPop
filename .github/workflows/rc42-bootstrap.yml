@@ -41,9 +41,11 @@ jobs:
           config=Path("app/build.gradle.kts").read_text()
           assert 'applicationIdSuffix = ".stablev2"' in config, "Production package ID changed"
           assert 'applicationIdSuffix = ".rc42preview"' in config, "Preview package ID changed"
-          versions=[int(line.split("=",1)[1].strip()) for line in config.splitlines()
-                    if line.strip().startswith("versionCode =")]
-          assert len(versions)==1 and versions[0]>=100, "Upgrade versionCode must be >=100"
+          assert "val stableBaseVersionCode = 100" in config, "Version baseline changed"
+          assert "versionCode = stableBaseVersionCode + actionsBuildIncrement" in config, (
+              "CI build number must increase versionCode for in-place updates"
+          )
+          assert 'System.getenv("GITHUB_RUN_NUMBER")' in config, "CI version counter missing"
           assert 'KEYPOP_SIGNING_KEYSTORE_PATH' in config and 'keypopStable' in config
           print("Upgrade contract OK: fixed package IDs, monotonic version floor and stable signing")
           PY
