@@ -38,6 +38,14 @@ keytool -genkeypair -v -keystore keypop-stable-v2.jks -storetype JKS \
 base64 -w0 keypop-stable-v2.jks
 ```
 
+On Windows with Android Studio/JDK installed, generate the keystore once in
+PowerShell or Command Prompt using `keytool`, then copy the file bytes as
+base64 using PowerShell (do not paste them into chat or a Git file):
+
+```powershell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes((Resolve-Path "keypop-stable-v2.jks"))) | Set-Clipboard
+```
+
 Copy the base64 output to the `KEYPOP_SIGNING_KEYSTORE_B64` secret using
 GitHub repository Settings → Secrets and variables → Actions, not into
 an issue, file, or chat. Record the keystore and password in an offline
