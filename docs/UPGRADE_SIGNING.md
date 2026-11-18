@@ -12,9 +12,14 @@ current keyboard.
 
 ## Permanent RC42+ production channel
 - App package: `com.aetherkeys.keyboard.stablev2` (do not rename).
-- First version: `versionCode = 100`, `versionName = 1.0.42-rc42`.
-- Future upgrades: increment versionCode (101, 102, ...), preserve package
-  and certificate. Never use a fresh default debug keystore for this channel.
+- Baseline: `stableBaseVersionCode = 100`, `versionName = 1.0.42-rc42`.
+- GitHub Actions automatically adds the workflow's increasing
+  `GITHUB_RUN_NUMBER` to the baseline, so later CI APKs have newer version
+  codes without manual numbering. **Keep this workflow's file path and
+  history**; resetting its run-number sequence could break upgrades.
+- If building outside this CI, set a versionCode higher than the latest
+  installed signed version, and reuse the identical package and certificate.
+  Never use a fresh default debug keystore for the stable channel.
 - Use a stable **private** keystore stored only in GitHub Actions encrypted
   repository/environment secrets or a secure local password manager.
 - Do **not** commit the keystore, private key, or signing passwords to Git.
