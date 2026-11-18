@@ -57,23 +57,64 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
-      - name: Configure reusable signing, if all required secrets exist
+      - name: Configure stable signing from ONE mobile-friendly secret or legacy four secrets
         shell: bash
         env:
+          KEYPOP_SIGNING_BOOTSTRAP_ENV: ${{ secrets.KEYPOP_SIGNING_BOOTSTRAP_ENV }}
           KEYPOP_SIGNING_KEYSTORE_B64: ${{ secrets.KEYPOP_SIGNING_KEYSTORE_B64 }}
         run: |
           set -euo pipefail
-          if [[ -n "$KEYPOP_SIGNING_KEYSTORE_B64" &&
-                -n "$KEYPOP_SIGNING_STORE_PASSWORD" &&
-                -n "$KEYPOP_SIGNING_KEY_ALIAS" &&
-                -n "$KEYPOP_SIGNING_KEY_PASSWORD" ]]; then
-            echo "$KEYPOP_SIGNING_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/keypop-release.jks"
+          if [[ -n "$KEYPOP_SIGNING_BOOTSTRAP_ENV" ]]; then
+            # Parse one GitHub encrypted secret; NEVER eval arbitrary shell content.
+            # Only the four whitelisted values are accepted.
+            python3 - <<'PY'
+          import os
+          import base64
+          import pathlib
+          import re
+          text = os.environ['KEYPOP_SIGNING_BOOTSTRAP_ENV']
+          allowed = {
+              'KEYPOP_SIGNING_KEYSTORE_B64', 'KEYPOP_SIGNING_STORE_PASSWORD',
+              'KEYPOP_SIGNING_KEY_ALIAS', 'KEYPOP_SIGNING_KEY_PASSWORD'
+          }
+          values = {}
+          for raw in text.splitlines():
+              if not raw.strip():
+                  continue
+              key, sep, value = raw.partition('=')
+              if not sep or key not in allowed or key in values or not value:
+                  raise ValueError('Invalid signing bundle structure')
+              values[key] = value
+          if set(values) != allowed:
+              raise ValueError('Signing bundle has missing or unknown keys')
+          for key in allowed - {'KEYPOP_SIGNING_KEYSTORE_B64'}:
+              if not re.fullmatch('[A-Za-z0-9_-]{8,128}', values[key]):
+                  raise ValueError('Unexpected credential format: ' + key)
+          decoded = base64.b64decode(values['KEYPOP_SIGNING_KEYSTORE_B64'], validate=True)
+          if len(decoded) < 1000 or len(decoded) > 128000:
+              raise ValueError('Invalid keystore size')
+          target = pathlib.Path(os.environ['RUNNER_TEMP']) / 'keypop-release.jks'
+          target.write_bytes(decoded)
+          target.chmod(0o600)
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as handle:
+              handle.write('KEYPOP_SIGNING_KEYSTORE_PATH=' + str(target) + '\n')
+              for key in sorted(allowed - {'KEYPOP_SIGNING_KEYSTORE_B64'}):
+                  handle.write(key + '=' + values[key] + '\n')
+              handle.write('HAS_STABLE_SIGNING=true\n')
+          print('Stable signing configured from encrypted ONE-secret bundle.')
+          PY
+          elif [[ -n "$KEYPOP_SIGNING_KEYSTORE_B64" &&
+                  -n "$KEYPOP_SIGNING_STORE_PASSWORD" &&
+                  -n "$KEYPOP_SIGNING_KEY_ALIAS" &&
+                  -n "$KEYPOP_SIGNING_KEY_PASSWORD" ]]; then
+            printf '%s' "$KEYPOP_SIGNING_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/keypop-release.jks"
             chmod 600 "$RUNNER_TEMP/keypop-release.jks"
             echo "KEYPOP_SIGNING_KEYSTORE_PATH=$RUNNER_TEMP/keypop-release.jks" >> "$GITHUB_ENV"
             echo "HAS_STABLE_SIGNING=true" >> "$GITHUB_ENV"
           else
             echo "HAS_STABLE_SIGNING=false" >> "$GITHUB_ENV"
-            echo "::notice::No permanent signing secrets configured; only non-upgradable engineering APKs will be staged."
+            echo "::notice::No permanent signing credentials: engineering APKs only."
+          fi
           fi
       - name: Run all unit tests, lint, compile APK and test APK
         run: gradle --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest
@@ -182,6 +223,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
+      KEYPOP_SIGNING_BOOTSTRAP_ENV: ${{ secrets.KEYPOP_SIGNING_BOOTSTRAP_ENV }}
       KEYPOP_SIGNING_KEYSTORE_B64: ${{ secrets.KEYPOP_SIGNING_KEYSTORE_B64 }}
       KEYPOP_SIGNING_STORE_PASSWORD: ${{ secrets.KEYPOP_SIGNING_STORE_PASSWORD }}
       KEYPOP_SIGNING_KEY_ALIAS: ${{ secrets.KEYPOP_SIGNING_KEY_ALIAS }}
@@ -191,10 +233,11 @@ jobs:
         id: gate
         shell: bash
         run: |
-          if [[ -n "$KEYPOP_SIGNING_KEYSTORE_B64" &&
-                -n "$KEYPOP_SIGNING_STORE_PASSWORD" &&
-                -n "$KEYPOP_SIGNING_KEY_ALIAS" &&
-                -n "$KEYPOP_SIGNING_KEY_PASSWORD" ]]; then
+          if [[ -n "$KEYPOP_SIGNING_BOOTSTRAP_ENV" ]] ||
+              [[ -n "$KEYPOP_SIGNING_KEYSTORE_B64" &&
+                 -n "$KEYPOP_SIGNING_STORE_PASSWORD" &&
+                 -n "$KEYPOP_SIGNING_KEY_ALIAS" &&
+                 -n "$KEYPOP_SIGNING_KEY_PASSWORD" ]]; then
             echo 'signed=true' >> "$GITHUB_OUTPUT"
           else
             echo 'signed=false' >> "$GITHUB_OUTPUT"
