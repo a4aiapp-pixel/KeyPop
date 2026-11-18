@@ -29,7 +29,7 @@ jobs:
           set -euo pipefail
           ARCHIVE=KeyPop-RC44-Preserved-Forms-Credentials-Integrated-SOURCE.zip
           test -s "$ARCHIVE"
-          echo '0f3c6e4ce2d903fd7b9624b137ca05fe4a7cc38e3bc13d285ce01f20031bfd0a  KeyPop-RC44-Preserved-Forms-Credentials-Integrated-SOURCE.zip' | sha256sum -c -
+          echo '14c410746344d45f40000fa928cd501280a8c90d745e810803b1228b8c36b441  KeyPop-RC44-Preserved-Forms-Credentials-Integrated-SOURCE.zip' | sha256sum -c -
           unzip -t "$ARCHIVE" | tail -n 1
           unzip -q "$ARCHIVE"
           test -s KeyPop-RC44-Source/app/src/main/java/com/aetherkeys/keyboard/AetherImeService.kt
@@ -221,7 +221,7 @@ jobs:
         run: |
           set -euo pipefail
           ARCHIVE=KeyPop-RC44-Preserved-Forms-Credentials-Integrated-SOURCE.zip
-          echo '0f3c6e4ce2d903fd7b9624b137ca05fe4a7cc38e3bc13d285ce01f20031bfd0a  KeyPop-RC44-Preserved-Forms-Credentials-Integrated-SOURCE.zip' | sha256sum -c -
+          echo '14c410746344d45f40000fa928cd501280a8c90d745e810803b1228b8c36b441  KeyPop-RC44-Preserved-Forms-Credentials-Integrated-SOURCE.zip' | sha256sum -c -
           unzip -q "$ARCHIVE"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
