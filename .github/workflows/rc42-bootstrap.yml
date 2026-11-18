@@ -1,0 +1,79 @@
+name: RC42 Bootstrap Android Source (not a release)
+on:
+  push:
+    branches:
+      - feature/rc42-adaptive-intelligence-integrated-20261118
+    paths:
+      - '.github/workflows/rc42-bootstrap.yml'
+      - 'KeyPop-main.zip'
+      - 'KeyPop-RC42-Intelligence-URL-Safety-GitReady-Overlay.zip'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rc42-bootstrap
+  cancel-in-progress: false
+
+jobs:
+  expand-and-stage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Inspect and safely unpack both uploaded source archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s KeyPop-main.zip
+          test -s KeyPop-RC42-Intelligence-URL-Safety-GitReady-Overlay.zip
+          python3 - <<'PY'
+          import zipfile
+          from pathlib import Path
+          for name, expected in [('KeyPop-main.zip','KeyPop-main/'),('KeyPop-RC42-Intelligence-URL-Safety-GitReady-Overlay.zip','KeyPop-RC42-GitReady-Overlay/')]:
+              with zipfile.ZipFile(name) as z:
+                  files=[m.filename for m in z.infolist()]
+                  assert files and all(x.startswith(expected) for x in files), (name,files[:10])
+                  assert all('..' not in Path(x).parts for x in files), name
+                  z.extractall('.rc42-unpack')
+                  print(name,len(files),'members')
+          PY
+          test -f .rc42-unpack/KeyPop-main/app/build.gradle.kts
+          test -f .rc42-unpack/KeyPop-RC42-GitReady-Overlay/tools/stage_into_keypop.py
+          cp -a .rc42-unpack/KeyPop-main/. .
+          python3 .rc42-unpack/KeyPop-RC42-GitReady-Overlay/tools/stage_into_keypop.py --repo "$PWD"
+          python3 .rc42-unpack/KeyPop-RC42-GitReady-Overlay/tools/stage_into_keypop.py --repo "$PWD" --apply
+          echo 'RC42 source overlay was staged. Live IME integration is still required.'
+      - name: Commit expanded source into the dedicated feature branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github app docs verification build.gradle.kts settings.gradle.kts gradle.properties .gitignore README.md
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(rc42): expand uploaded base and stage adaptive source overlay"
+            git push origin "HEAD:feature/rc42-adaptive-intelligence-integrated-20261118"
+          fi
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - name: Compile baseline plus new RC42 source and run tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest
+      - name: Upload non-release debug APK for engineering validation
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: KeyPop-RC42-baseline-engineering-apk-not-release
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
