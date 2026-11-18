@@ -1,0 +1,249 @@
+name: KeyPop RC43 full RC40 restoration and signed APK release
+on:
+  push:
+    branches: [main]
+    paths: [KeyPop-RC43-RC40-Restored-RC42-Integrated-SOURCE.zip]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: keypop-rc43-restoration
+  cancel-in-progress: true
+
+jobs:
+  restored:
+    name: Full RC40 restoration, tests, permanent signing and Android upgrade
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      KEYPOP_SIGNING_BOOTSTRAP_ENV: ${{ secrets.KEYPOP_SIGNING_BOOTSTRAP_ENV }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Verify exact RC43 merged source and extract
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE=KeyPop-RC43-RC40-Restored-RC42-Integrated-SOURCE.zip
+          test -s "$ARCHIVE"
+          echo '5fae64d3b3597b8b0f4ec926723fda4c8b1de41c706364c36e9fd77b993de70d  KeyPop-RC43-RC40-Restored-RC42-Integrated-SOURCE.zip' | sha256sum -c -
+          unzip -t "$ARCHIVE" | tail -n 1
+          unzip -q "$ARCHIVE"
+          test -s KeyPop-RC43-Source/app/src/main/java/com/aetherkeys/keyboard/AetherImeService.kt
+          test -s KeyPop-RC43-Source/app/src/main/java/com/aetherkeys/keyboard/KeyPopOfflineSindhiEngine.kt
+          python3 KeyPop-RC43-Source/ci/verify_rc43_source.py
+          if grep -R -l -F 'KEYPOP_SIGNING_KEYSTORE_B64=' KeyPop-RC43-Source; then
+            echo '::error::Source package contains private signing credentials' >&2
+            exit 1
+          fi
+      - name: Configure permanent signing from one encrypted GitHub secret
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$KEYPOP_SIGNING_BOOTSTRAP_ENV" ]]; then
+            echo '::error::Missing KEYPOP_SIGNING_BOOTSTRAP_ENV. No release may be signed using an ephemeral key.'
+            exit 1
+          fi
+          python3 - <<'PY'
+          import os, base64, pathlib, re
+          data = os.environ['KEYPOP_SIGNING_BOOTSTRAP_ENV']
+          allowed = {'KEYPOP_SIGNING_KEYSTORE_B64','KEYPOP_SIGNING_STORE_PASSWORD',
+                     'KEYPOP_SIGNING_KEY_ALIAS','KEYPOP_SIGNING_KEY_PASSWORD'}
+          creds={}
+          for line in data.splitlines():
+              if not line.strip(): continue
+              key, sep, value = line.partition('=')
+              if not sep or key not in allowed or key in creds or not value:
+                  raise SystemExit('Invalid signing secret format')
+              creds[key]=value
+          if set(creds)!=allowed:raise SystemExit('Incomplete signing material')
+          b=base64.b64decode(creds['KEYPOP_SIGNING_KEYSTORE_B64'], validate=True)
+          if not 1000 <= len(b) <= 128000:raise SystemExit('Invalid signing keystore')
+          path=pathlib.Path(os.environ['RUNNER_TEMP'])/'keypop-permanent.jks'
+          path.write_bytes(b)
+          path.chmod(0o600)
+          with open(os.environ['GITHUB_ENV'],'a') as f:
+              f.write('KEYPOP_SIGNING_KEYSTORE_PATH='+str(path)+'\n')
+              for key in sorted(allowed-{'KEYPOP_SIGNING_KEYSTORE_B64'}):
+                  value=creds[key]
+                  if not re.fullmatch('[A-Za-z0-9_-]{8,128}',value):
+                      raise SystemExit('Invalid signing credential field')
+                  print('::add-mask::'+value)
+                  f.write(key+'='+value+'\n')
+          print('Permanent signing material loaded without displaying secret values')
+          PY
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Android SDK 36
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDKMANAGER="$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools" -type f -name sdkmanager | sort -V | tail -1)"
+          test -x "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" 'platforms;android-36' 'build-tools;36.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - name: Compile all RC40 + RC42 unit tests, lint, debug and signed release APKs
+        working-directory: KeyPop-RC43-Source
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest :app:assembleRelease
+      - name: Verify APK certificate and in-place upgrade version code
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          APKSIGNER="$(find "$SDK/build-tools" -mindepth 2 -maxdepth 2 -name apksigner | sort -V | tail -n 1)"
+          AAPT="$(find "$SDK/build-tools" -mindepth 2 -maxdepth 2 -name aapt | sort -V | tail -n 1)"
+          test -x "$APKSIGNER"; test -x "$AAPT"
+          mkdir -p dist
+          cp KeyPop-RC43-Source/app/build/outputs/apk/debug/app-x86_64-debug.apk dist/KeyPop-RC43-x86_64-debug.apk
+          cp KeyPop-RC43-Source/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk dist/KeyPop-RC43-androidTest.apk
+          cp KeyPop-RC43-Source/app/build/outputs/apk/release/app-arm64-v8a-release.apk dist/KeyPop-RC43-arm64-v8a-signed.apk
+          cp KeyPop-RC43-Source/app/build/outputs/apk/release/app-universal-release.apk dist/KeyPop-RC43-universal-signed.apk
+          for APK in dist/*-signed.apk; do
+            "$APKSIGNER" verify --verbose "$APK"
+            python3 - "$APKSIGNER" "$APK" <<'PY'
+          import re,subprocess,sys
+          a,p=sys.argv[1:]; expected='1ab47eb692c5f25d42cef11d6ae9993a31ae5fda157f7d7f41a400490db6e0a6'
+          lines=subprocess.check_output([a,'verify','--print-certs',p],text=True).splitlines()
+          digests=[]
+          for line in lines:
+              m=re.search(r'SHA[- ]?256\s+digest\s*:\s*([0-9a-fA-F:\s]+)',line,re.I)
+              if 'certificate' in line.lower() and m:
+                  value=re.sub('[^0-9a-fA-F]','',m.group(1)).lower()
+                  if len(value)==64:digests.append(value)
+          if digests != [expected]:raise SystemExit('APK permanent signing certificate mismatch')
+          print('PASS: signed certificate matches immutable RC42 stablev2')
+          PY
+          done
+          "$AAPT" dump badging dist/KeyPop-RC43-universal-signed.apk > dist/badging.txt
+          grep -Fq "name='com.aetherkeys.keyboard.stablev2'" dist/badging.txt
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          info=Path('dist/badging.txt').read_text()
+          code=int(re.search(r"versionCode='(\d+)'",info).group(1))
+          if code < 10000:raise SystemExit('RC43 versionCode cannot replace RC42 stablev2')
+          print('PASS: monotonically larger stablev2 versionCode',code)
+          PY
+      - name: Upload signed candidates and instrumentation package
+        uses: actions/upload-artifact@v4
+        with:
+          name: KeyPop-RC43-signed-ARM64-universal
+          path: |
+            dist/KeyPop-RC43-arm64-v8a-signed.apk
+            dist/KeyPop-RC43-universal-signed.apk
+          if-no-files-found: error
+      - name: Upload emulator test artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: KeyPop-RC43-emulator-inputs
+          path: |
+            dist/KeyPop-RC43-x86_64-debug.apk
+            dist/KeyPop-RC43-androidTest.apk
+          if-no-files-found: error
+
+  emulator:
+    name: RC40 historical tests and actual RC42-to-RC43 upgrade
+    needs: restored
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: KeyPop-RC43-signed-ARM64-universal
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: KeyPop-RC43-emulator-inputs
+          path: dist
+      - name: Retrieve actual published RC42 stable-signed APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          gh release download v1.0.42-rc42-stable-signed-preview \
+            --pattern 'KeyPop-RC42-universal-signed.apk' --dir dist --repo "$GH_REPO"
+          test -s dist/KeyPop-RC42-universal-signed.apk
+      - name: Allow KVM
+        shell: bash
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-keypop-kvm.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Android 35 regression and true installed-app upgrade
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: default
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          script: bash ci/rc43_android_smoke.sh
+      - name: Upload emulator forensic evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: KeyPop-RC43-emulator-failure
+          path: forensic-evidence
+          if-no-files-found: ignore
+
+  publish:
+    name: Publish FULL restored KeyPop RC43 only after all tests
+    needs: [restored, emulator]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: KeyPop-RC43-signed-ARM64-universal
+          path: dist
+      - name: Publish full RC40-restored source as a separate branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE=KeyPop-RC43-RC40-Restored-RC42-Integrated-SOURCE.zip
+          echo '5fae64d3b3597b8b0f4ec926723fda4c8b1de41c706364c36e9fd77b993de70d  KeyPop-RC43-RC40-Restored-RC42-Integrated-SOURCE.zip' | sha256sum -c -
+          unzip -q "$ARCHIVE"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c feature/rc43-restored-combined-20261118
+          cp -a KeyPop-RC43-Source/app .
+          cp -a KeyPop-RC43-Source/docs .
+          cp -a KeyPop-RC43-Source/verification . || true
+          cp KeyPop-RC43-Source/{build.gradle.kts,settings.gradle.kts,gradle.properties,README.md} .
+          cp KeyPop-RC43-Source/ci/verify_rc43_source.py ci/
+          git add app docs verification ci/verify_rc43_source.py build.gradle.kts settings.gradle.kts gradle.properties README.md
+          git commit -m 'restore: complete RC40 keyboard + RC42 intelligence and permanent stablev2 identity'
+          git push origin HEAD:refs/heads/feature/rc43-restored-combined-20261118
+          echo "RESTORED_SOURCE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+      - name: Publish signed ARM64 and Universal RC43 APKs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$RESTORED_SOURCE_SHA"
+          TAG=v1.0.43-rc43-rc40-restored-stable-signed
+          gh release create "$TAG" \
+            dist/KeyPop-RC43-arm64-v8a-signed.apk \
+            dist/KeyPop-RC43-universal-signed.apk \
+            --target "$RESTORED_SOURCE_SHA" --prerelease \
+            --title 'KeyPop RC43 — RC40 features restored + RC42 intelligence' \
+            --notes 'Built from the full original RC40 keyboard project, with RC42 adaptive intelligence, opt-in encrypted memory, and safe browser URL editing. Uses permanent com.aetherkeys.keyboard.stablev2 signing identity, compatible with signed RC42 upgrade. Historical RC40 debug preview is a different package and remains a separate installation. Source and historical tests are in feature/rc43-restored-combined-20261118.'
