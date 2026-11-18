@@ -9,6 +9,7 @@ on:
       - 'settings.gradle.kts'
       - 'gradle.properties'
       - 'verification/**'
+      - 'ci/**'
   workflow_dispatch:
 
 permissions:
@@ -29,14 +30,23 @@ jobs:
       KEYPOP_SIGNING_KEY_PASSWORD: ${{ secrets.KEYPOP_SIGNING_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
-      - name: Check integrated source and fixed upgrade identity
+      - name: Check integrated source and permanent upgrade identity
         shell: bash
         run: |
           set -euo pipefail
           test -s app/src/main/java/com/aetherkeys/keyboard/AetherImeService.kt
           test -s app/src/main/java/com/aetherkeys/keyboard/KeyPopAdaptiveServiceController.kt
-          grep -q 'applicationIdSuffix = ".stablev2"' app/build.gradle.kts
-          grep -q 'versionCode = 100' app/build.gradle.kts
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          config=Path("app/build.gradle.kts").read_text()
+          assert re.search(r'applicationIdSuffix\\s*=\\s*"\\.stablev2"',config), "Production package ID changed"
+          assert re.search(r'applicationIdSuffix\\s*=\\s*"\\.rc42preview"',config), "Preview package ID changed"
+          versions=re.findall(r'versionCode\\s*=\\s*(\\d+)',config)
+          assert len(versions)==1 and int(versions[0])>=100, "Upgrade versionCode must be >=100"
+          assert 'KEYPOP_SIGNING_KEYSTORE_PATH' in config and 'keypopStable' in config
+          print("Upgrade contract OK: fixed package IDs, monotonic version floor and stable signing")
+          PY
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -130,17 +140,7 @@ jobs:
           arch: x86_64
           profile: pixel_6
           disable-animations: true
-          script: |
-            set -euo pipefail
-            PKG=com.aetherkeys.keyboard.rc42preview
-            adb install -r dist/KeyPop-RC42-x86_64-debug.apk
-            adb shell pm path "$PKG" | grep -q package:
-            adb shell am start -W -n "$PKG/com.aetherkeys.keyboard.MainActivity"
-            adb shell ime enable "$PKG/com.aetherkeys.keyboard.AetherImeService"
-            adb shell ime set "$PKG/com.aetherkeys.keyboard.AetherImeService"
-            adb install -r dist/KeyPop-RC42-androidTest.apk
-            adb shell am instrument -w -r "$PKG.test/androidx.test.runner.AndroidJUnitRunner" | tee instrumentation.txt
-            grep -E 'OK \\([0-9]+ tests?\\)' instrumentation.txt
+          script: bash ci/rc42_smoke_android.sh
       - name: Upload forensic evidence if emulator fails
         if: failure()
         uses: actions/upload-artifact@v4
