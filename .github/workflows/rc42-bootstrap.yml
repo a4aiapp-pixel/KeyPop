@@ -9,6 +9,7 @@ on:
       - 'settings.gradle.kts'
       - 'gradle.properties'
       - 'verification/**'
+      - 'docs/KEYPOP_STABLE_SIGNING_CERT_SHA256.txt'
       - 'ci/**'
   workflow_dispatch:
 
@@ -79,6 +80,26 @@ jobs:
       - name: Compile stable signed ARM64 and Universal APKs when provisioned
         if: env.HAS_STABLE_SIGNING == 'true'
         run: gradle --no-daemon :app:assembleRelease
+      - name: Verify stable APK signing against pinned public certificate
+        if: env.HAS_STABLE_SIGNING == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXPECTED="$(tr -d '[:space:]' < docs/KEYPOP_STABLE_SIGNING_CERT_SHA256.txt)"
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          test -d "$SDK_ROOT/build-tools"
+          APKSIGNER="$(find "$SDK_ROOT/build-tools" -mindepth 2 -maxdepth 2 -name apksigner | sort -V | tail -n 1)"
+          test -x "$APKSIGNER"
+          for APK in app/build/outputs/apk/release/app-arm64-v8a-release.apk app/build/outputs/apk/release/app-universal-release.apk; do
+            "$APKSIGNER" verify --verbose "$APK"
+            FOUND="$("$APKSIGNER" verify --print-certs "$APK" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | tr 'A-F' 'a-f' | tr -d '[:space:]')"
+            test -n "$FOUND"
+            if [[ "$FOUND" != "$EXPECTED" ]]; then
+              echo "::error::APK certificate does not match pinned KeyPop stable signing identity"
+              exit 1
+            fi
+          done
+          echo "Both release APKs share the pinned permanent KeyPop signing certificate"
       - name: Stage engineering APKs
         shell: bash
         run: |
@@ -154,7 +175,7 @@ jobs:
   signed-preview:
     name: Publish only stable-signed RC42 prerelease variants
     needs: [android, emulator]
-    if: ${{ github.event_name == 'push' }}
+    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
