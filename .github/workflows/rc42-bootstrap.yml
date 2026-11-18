@@ -115,7 +115,6 @@ jobs:
             echo "HAS_STABLE_SIGNING=false" >> "$GITHUB_ENV"
             echo "::notice::No permanent signing credentials: engineering APKs only."
           fi
-          fi
       - name: Run all unit tests, lint, compile APK and test APK
         run: gradle --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest
       - name: Compile stable signed ARM64 and Universal APKs when provisioned
