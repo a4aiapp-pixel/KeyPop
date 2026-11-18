@@ -228,10 +228,13 @@ jobs:
           git switch -c feature/rc43-restored-combined-20261118
           cp -a KeyPop-RC43-Source/app .
           cp -a KeyPop-RC43-Source/docs .
-          cp -a KeyPop-RC43-Source/verification . || true
+          if [[ -d KeyPop-RC43-Source/verification ]]; then
+            cp -a KeyPop-RC43-Source/verification .
+          fi
           cp KeyPop-RC43-Source/{build.gradle.kts,settings.gradle.kts,gradle.properties,README.md} .
           cp KeyPop-RC43-Source/ci/verify_rc43_source.py ci/
-          git add app docs verification ci/verify_rc43_source.py build.gradle.kts settings.gradle.kts gradle.properties README.md
+          git add app docs ci/verify_rc43_source.py build.gradle.kts settings.gradle.kts gradle.properties README.md
+          if [[ -d verification ]]; then git add verification; fi
           git commit -m 'restore: complete RC40 keyboard + RC42 intelligence and permanent stablev2 identity'
           git push origin HEAD:refs/heads/feature/rc43-restored-combined-20261118
           echo "RESTORED_SOURCE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
