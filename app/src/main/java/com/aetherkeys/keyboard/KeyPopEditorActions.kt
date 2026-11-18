@@ -1,0 +1,75 @@
+package com.aetherkeys.keyboard
+
+import android.text.InputType
+import android.view.KeyEvent
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputConnection
+
+/** Editors are responsible for their own action flags. A visible Enter key must
+ * still insert a newline into multiline content, especially WhatsApp drafts.
+ * IME_ACTION_SEND is a request to show a Send key, not a requirement to send
+ * when the keyboard visibly offers Enter. */
+object KeyPopEnterPolicy {
+    fun insertsNewline(info:EditorInfo?):Boolean =
+        info==null || insertsNewline(info.inputType,info.imeOptions,info.packageName.orEmpty())
+
+    /** Pure overload for host-editor policy regression tests. */
+    fun insertsNewline(inputType:Int,imeOptions:Int,packageName:String):Boolean {
+        if(inputType and InputType.TYPE_MASK_CLASS!=InputType.TYPE_CLASS_TEXT)return false
+        val variation=inputType and InputType.TYPE_MASK_VARIATION
+        if(variation in setOf(
+            InputType.TYPE_TEXT_VARIATION_PASSWORD,
+            InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD,
+            InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD,
+            InputType.TYPE_TEXT_VARIATION_URI,
+            InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS,
+            InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS
+        ))return false
+        val action=imeOptions and EditorInfo.IME_MASK_ACTION
+        // Search and Go are explicit commands even inside messaging apps.
+        if(action==EditorInfo.IME_ACTION_SEARCH || action==EditorInfo.IME_ACTION_GO)
+            return false
+        // WhatsApp's composer may advertise DONE/NEXT despite exposing a
+        // multi-line chat box. Sending that editor action closes the keyboard.
+        // For the visible newline key, honor the chat composer before DONE.
+        if(packageName=="com.whatsapp" || packageName=="com.whatsapp.w4b")
+            return true
+        if(imeOptions and EditorInfo.IME_FLAG_NO_ENTER_ACTION!=0)return true
+        if(action in setOf(EditorInfo.IME_ACTION_NEXT,EditorInfo.IME_ACTION_DONE,
+            EditorInfo.IME_ACTION_PREVIOUS))return false
+        return inputType and InputType.TYPE_TEXT_FLAG_MULTI_LINE!=0
+    }
+}
+
+/** Uses InputConnection's selected-text replacement semantics rather than
+ * deleteSurroundingText, which does not reliably remove selected content.
+ * No clipboard writes or persistence of selected text occur. */
+object KeyPopEditorActions {
+    enum class Deletion { SELECTED_TEXT, CODE_POINT, FAILED }
+
+    fun deleteBackward(connection:InputConnection?,selectionReported:Boolean=false):Deletion {
+        if(connection==null)return Deletion.FAILED
+        val selected=selectionReported || runCatching {
+            connection.getSelectedText(0)?.isNotEmpty()==true
+        }.getOrDefault(false)
+        if(selected || selectionReported) {
+            if(runCatching { connection.commitText("",1) }.getOrDefault(false))
+                return Deletion.SELECTED_TEXT
+            // A few web editors reject an empty commit: try the standard DEL.
+            if(sendBackspace(connection))return Deletion.SELECTED_TEXT
+            return Deletion.FAILED
+        }
+        if(runCatching { connection.deleteSurroundingTextInCodePoints(1,0) }
+                .getOrDefault(false))return Deletion.CODE_POINT
+        if(runCatching { connection.deleteSurroundingText(1,0) }
+                .getOrDefault(false))return Deletion.CODE_POINT
+        return if(sendBackspace(connection))Deletion.CODE_POINT else Deletion.FAILED
+    }
+
+    private fun sendBackspace(connection:InputConnection):Boolean =
+        runCatching {
+            val down=connection.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN,KeyEvent.KEYCODE_DEL))
+            val up=connection.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP,KeyEvent.KEYCODE_DEL))
+            down && up
+        }.getOrDefault(false)
+}

@@ -1,0 +1,229 @@
+package com.aetherkeys.keyboard
+
+import android.app.Activity
+import android.app.AlertDialog
+import android.content.Context
+import android.content.Intent
+import android.content.pm.ApplicationInfo
+import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
+import android.os.Bundle
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import android.provider.Settings
+import android.text.InputType
+import android.view.Gravity
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
+import android.widget.EditText
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.Switch
+import android.widget.TextView
+import android.widget.Toast
+
+/**
+ * Launch-safe keyboard setup. No model downloads, vault access, or heavy theme previews
+ * are initialized until the user explicitly opens those features.
+ */
+class KeyPopHomeActivity : Activity() {
+    private val bg = 0xFF101D2B.toInt()
+    private val ink = Color.WHITE
+    private val muted = 0xFFC1D4E2.toInt()
+    private val teal = 0xFF70E7D3.toInt()
+    private lateinit var keyboardStatus: TextView
+    private fun dp(value:Int) = (value * resources.displayMetrics.density).toInt()
+    private fun text(value:String,size:Float=15f,color:Int=ink,bold:Boolean=false):TextView =
+        TextView(this).apply {
+            text=value; textSize=size;setTextColor(color)
+            if(bold)typeface=Typeface.create("sans-serif-medium",Typeface.BOLD)
+            setPadding(0,dp(7),0,dp(7))
+        }
+    private fun addButton(parent:LinearLayout,title:String,onPress:()->Unit) {
+        val control=text(title,16f,ink,true).apply {
+            gravity=Gravity.CENTER
+            minHeight=dp(54)
+            background=GradientDrawable().apply {
+                setColor(0xFF245268.toInt())
+                cornerRadius=dp(12).toFloat()
+                setStroke(dp(1),0xFF579FC0.toInt())
+            }
+            setOnClickListener {
+                try { onPress() }
+                catch(ex:Exception) {
+                    Toast.makeText(this@KeyPopHomeActivity,
+                        "Unable to open: "+(ex.localizedMessage?:"Android service unavailable"),
+                        Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+        parent.addView(control,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(11)})
+    }
+    override fun onCreate(savedInstanceState:Bundle?) {
+        super.onCreate(savedInstanceState)
+        window.statusBarColor=bg
+        window.navigationBarColor=bg
+        if(applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE!=0 &&
+            intent.getBooleanExtra("keypopPredictionSmoke",false)) {
+            showPredictionSmoke()
+            return
+        }
+        val scroll=ScrollView(this).apply {
+            isFillViewport=true
+            setBackgroundColor(bg)
+        }
+        val column=LinearLayout(this).apply {
+            orientation=LinearLayout.VERTICAL
+            setPadding(dp(20),dp(18),dp(20),dp(26))
+        }
+        ViewCompat.setOnApplyWindowInsetsListener(column){view,insets->
+            val bars=insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            view.setPadding(dp(20),dp(18)+bars.top,dp(20),dp(26)+bars.bottom)
+            insets
+        }
+        scroll.addView(column)
+        setContentView(scroll)
+        ViewCompat.requestApplyInsets(scroll)
+
+        val installedVersion=runCatching {
+            packageManager.getPackageInfo(packageName,0).versionName
+        }.getOrNull()?:"Preview"
+        column.addView(text("KEYPOP  ·  "+installedVersion,27f,teal,true))
+        column.addView(text("Keyboard Setup",24f,ink,true))
+        column.addView(text("English ⇄ اردو  •  سنڌي",17f,muted))
+        column.addView(text("To type, enable KeyPop in Android settings and choose it as the active keyboard. Installing an APK does not activate it.",14f,muted))
+        keyboardStatus=text("Checking keyboard activation…",15f,ink,true)
+        column.addView(keyboardStatus)
+        addButton(column,"1  Enable KeyPop keyboard") {
+            startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
+        }
+        addButton(column,"2  Choose KeyPop as active keyboard") {
+            (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
+                .showInputMethodPicker()
+        }
+        column.addView(text("Keyboard test field",15f,teal,true))
+        val typingTest=EditText(this).apply {
+            hint="Tap here to test the selected keyboard"
+            setHintTextColor(muted)
+            setTextColor(ink)
+            textSize=17f
+            minLines=2
+            setPadding(dp(12),dp(10),dp(12),dp(10))
+            background=GradientDrawable().apply {
+                setColor(0xFF27384E.toInt())
+                cornerRadius=dp(10).toFloat()
+            }
+        }
+        column.addView(typingTest,LinearLayout.LayoutParams(-1,-2))
+        addButton(column,"Choose language packs · download selected directions") {
+            startActivity(Intent(this,KeyPopModelManagerActivity::class.java))
+        }
+        addButton(column,"📷 Enable automatic screenshots and clipboard history") {
+            startActivity(Intent(this,KeyPopScreenshotAccessActivity::class.java))
+        }
+        column.addView(text("For Gboard-style screenshot offers, grant "+
+            "Allow all photos in the permission dialog. KeyPop can then "+
+            "save new captures to its encrypted screenshot archive.",13f,muted))
+        addButton(column,"KeyPop settings") {
+            startActivity(Intent(this,MainActivity::class.java)
+                .putExtra("openSection","settingsHome")
+                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP))
+        }
+        column.addView(text("English ↔ Urdu works offline with downloaded Google ML Kit packs. Sindhi model files are experimental and must pass independent translation checks.",13f,muted))
+        val settings=getSharedPreferences("keypop",MODE_PRIVATE)
+        if(!settings.getBoolean("firstSindhiOfferV100",false)) {
+            settings.edit().putBoolean("firstSindhiOfferV100",true).apply()
+            column.post {
+                if(!isFinishing && !isDestroyed) {
+                    AlertDialog.Builder(this)
+                        .setTitle("Choose offline translation packs")
+                        .setMessage("Select only the English, Urdu or Sindhi translation directions you need. Review the list and download with progress tracking.")
+                        .setPositiveButton("Choose packs") {_,_->
+                            startActivity(Intent(this,KeyPopModelManagerActivity::class.java))
+                        }
+                        .setNegativeButton("Later",null).show()
+                }
+            }
+        }
+    }
+    private fun showPredictionSmoke() {
+        getSharedPreferences("keypop_visual_probe",MODE_PRIVATE).edit().clear().commit()
+        val coordinates=getSharedPreferences("keypop_visual_test",MODE_PRIVATE)
+        coordinates.edit().clear().commit()
+        val preferences=getSharedPreferences("keypop",MODE_PRIVATE)
+        val root=LinearLayout(this).apply {
+            orientation=LinearLayout.VERTICAL
+            setPadding(dp(12),0,dp(12),0)
+            isFocusableInTouchMode=true
+            setBackgroundColor(bg)
+        }
+        ViewCompat.setOnApplyWindowInsetsListener(root){view,insets->
+            view.setPadding(dp(12),insets.getInsets(WindowInsetsCompat.Type.systemBars()).top,dp(12),0)
+            insets
+        }
+        val fields=linkedMapOf<String,android.view.View>()
+        fun field(id:String,title:String,type:Int,options:Int) {
+            val editor=EditText(this).apply {
+                setSingleLine(true)
+                inputType=type
+                imeOptions=options or EditorInfo.IME_FLAG_NO_EXTRACT_UI
+                privateImeOptions=KeyPopVisualProbe.FIELD_PREFIX+id
+                hint=title
+                setTextColor(ink)
+                setHintTextColor(muted)
+                textSize=15f
+                setPadding(dp(8),0,dp(8),0)
+            }
+            fields[id]=editor
+            root.addView(editor,LinearLayout.LayoutParams(-1,dp(48)))
+        }
+        val textClass=InputType.TYPE_CLASS_TEXT
+        val noSuggestions=InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+        field("plain","Message",textClass,EditorInfo.IME_ACTION_DONE)
+        field("web","Web search",textClass or InputType.TYPE_TEXT_VARIATION_WEB_EDIT_TEXT or noSuggestions,
+            EditorInfo.IME_ACTION_SEARCH)
+        field("address","Private search or address",textClass or InputType.TYPE_TEXT_VARIATION_URI or noSuggestions,
+            EditorInfo.IME_ACTION_GO or EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING)
+        field("password","Password",textClass or InputType.TYPE_TEXT_VARIATION_PASSWORD,EditorInfo.IME_ACTION_DONE)
+        val suggestions=Switch(this).apply {
+            text="Show word suggestions"
+            setTextColor(ink)
+            isChecked=preferences.getBoolean("suggestions",true)
+            setOnCheckedChangeListener { _,checked ->
+                preferences.edit().putBoolean("suggestions",checked).apply()
+            }
+            isFocusable=false
+        }
+        fields["toggle"]=suggestions
+        root.addView(suggestions,LinearLayout.LayoutParams(-1,dp(44)))
+        root.addOnLayoutChangeListener { _,_,_,_,_,_,_,_,_ ->
+            val values=coordinates.edit()
+            for((name,view) in fields) {
+                val point=IntArray(2)
+                view.getLocationOnScreen(point)
+                values.putInt(name+"_x",point[0]+view.width/2)
+                    .putInt(name+"_y",point[1]+view.height/2)
+            }
+            values.apply()
+        }
+        setContentView(root)
+        root.requestFocus()
+        ViewCompat.requestApplyInsets(root)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if(!::keyboardStatus.isInitialized)return
+        val active=runCatching {
+            Settings.Secure.getString(contentResolver,
+                Settings.Secure.DEFAULT_INPUT_METHOD).orEmpty()
+        }.getOrDefault("")
+        val selected=active.startsWith("$packageName/") &&
+            active.contains("AetherImeService")
+        keyboardStatus.text=if(selected)
+            "✓ KeyPop is your active keyboard"
+        else "KeyPop has not yet been selected as the active keyboard"
+        keyboardStatus.setTextColor(if(selected)teal else 0xFFFFD39C.toInt())
+    }
+}

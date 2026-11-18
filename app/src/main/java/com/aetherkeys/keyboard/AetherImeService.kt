@@ -1,0 +1,3251 @@
+package com.aetherkeys.keyboard
+
+import android.content.ClipData
+import android.content.ClipDescription
+import android.content.BroadcastReceiver
+import android.content.IntentFilter
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.SharedPreferences
+import android.database.ContentObserver
+import android.provider.MediaStore
+import android.os.Handler
+import android.os.Looper
+import android.content.Intent
+import android.graphics.Color
+import android.graphics.BitmapFactory
+import android.widget.ImageView
+import android.widget.ImageButton
+import android.net.Uri
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
+import android.inputmethodservice.InputMethodService
+import android.media.AudioManager
+import android.os.Build
+import android.text.InputType
+import android.view.MotionEvent
+import android.graphics.Rect
+import android.os.SystemClock
+import android.view.Gravity
+import android.view.HapticFeedbackConstants
+import android.view.KeyEvent
+import android.view.View
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputContentInfo
+import android.view.inputmethod.InputConnection
+import android.widget.Button
+import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.PopupMenu
+import android.widget.HorizontalScrollView
+import android.widget.TextView
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import android.widget.Toast
+import java.util.Locale
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
+
+class AetherImeService : InputMethodService() {
+    private val prefs by lazy { getSharedPreferences("keypop",Context.MODE_PRIVATE) }
+    private val clipStore by lazy { ClipStore(this) }
+    private val clipExecutor=Executors.newSingleThreadExecutor()
+    private var clipPage=0
+    private var clipTab=0
+    private var clipPanelGeneration=0
+    private val lexicon by lazy { KeyPopLexicon(this) }
+    private var suggestionBar:LinearLayout?=null
+    /** Real toolbar, shared between Material and alternate styles. */
+    private var suggestionToolbar:LinearLayout?=null
+    private var inputViewActive=false
+    private var suggestionReadRetries=0
+    private var lastSuggestionContext:String?=null
+    private val suggestionPrefsListener=SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if(inputViewActive && suggestionBar!=null) {
+            when {
+                key=="suggestions" || key=="alwaysShowToolbar" || key=="predictNext" ||
+                    key=="contextPredictions" || key=="aggressivePredictions" ||
+                    key=="grammarHints" -> {
+                    cancelSuggestionWork()
+                    refreshSuggestions()
+                }
+                key?.startsWith("suggestion")==true && key!="suggestionSpace" -> draw()
+            }
+        }
+    }
+    private val predictionExecutor=Executors.newSingleThreadExecutor()
+    private val predictionHandler=Handler(Looper.getMainLooper())
+    // A short-lived RAM-only mirror avoids remote editor IPC on every key.
+    private val editorContext=KeyPopEditorContext()
+    private var contextCacheHits=0
+    private var contextCacheMisses=0
+    private var lastKeyboardTouchAt=0L
+    private var lastKnownSelection:Int?=null
+    private var hasSelectedRange=false
+    private val trailingWordPattern=Regex("[\\p{L}\\p{M}]+(?:['’][\\p{L}\\p{M}]+)*$")
+    // Cache immutable visual primitives once per keyboard rebuild, not per key.
+    private var renderSkin:KeyPopSkin?=null
+    private var regularKeyBackground:android.graphics.drawable.Drawable?=null
+    private var primaryKeyBackground:android.graphics.drawable.Drawable?=null
+    private data class SpaceAdvice(val language:Int,val before:String,
+        val word:String,val correction:String?,val grammar:KeyPopGrammarFix?)
+    private var latestSpaceAdvice:SpaceAdvice?=null
+    // Some editors (notably browser search fields) normalize trailing spaces.
+    // A short-lived boundary ensures the next typed word is still separated.
+    private data class PendingSuggestionBoundary(
+        val word:String,val targetPackage:String,val acceptedAtMs:Long)
+    private var pendingSuggestionBoundary:PendingSuggestionBoundary?=null
+    private var predictionPending:Runnable?=null
+    private var suggestionRefreshTask:Runnable?=null
+    @Volatile private var predictionGeneration=0
+    private val personalLanguage by lazy {KeyPopPersonalLanguageModel(this)}
+    // RC43 adds RC42's encrypted, explicitly opt-in intelligence alongside the
+    // EXISTING RC40 engine; never replace the original suggestion renderer.
+    private val adaptiveController by lazy { KeyPopAdaptiveServiceController(applicationContext) }
+    private var adaptiveEditorEpoch=0L
+
+    private val personalLearningExecutor=Executors.newSingleThreadExecutor()
+    private val repeatHandler=Handler(Looper.getMainLooper())
+    private var repeatBackspace:Runnable?=null
+    private var didRepeatBackspace=false
+    private data class AppliedCorrection(val original:String,val corrected:String,
+        val editor:String,val time:Long)
+    private var lastAppliedCorrection:AppliedCorrection?=null
+    private var lastRejectedCorrection:Pair<String,String>?=null
+    private val keyViews=ArrayList<Pair<Button,String>>()
+    private val imagePreviewExecutor=Executors.newFixedThreadPool(2)
+    private val screenshotArchiveExecutor=Executors.newSingleThreadExecutor()
+    private val screenshotArchiveRunning=AtomicBoolean(false)
+    private var lastArchiveRequest=0L
+    @Volatile private var recentScreenshotUri:Uri?=null
+    @Volatile private var screenshotMime="image/png"
+    private var screenshotRefreshToken=0
+    private var dismissedScreenshotUri:Uri?=null
+    private var screenshotSlot:LinearLayout?=null
+    private var screenshotObserver:ContentObserver?=null
+    private var screenshotDebounce:Runnable?=null
+    private val clipboard by lazy { getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager }
+    private val languages=listOf("ENGLISH","اردو","سنڌي")
+    private var language=0
+    private var shift=false
+    private var symbols=false
+    private var clipsOpen=false
+    private var toolsOpen=false
+    private var toolsPage=0
+    private var resizeOpen=false
+    private var navSafeBottomPx=0
+    private var lastImeOrientation=0
+    private var translatorOpen=false
+    private var writingOpen=false
+    private var writingSource=""
+    private var writingPreview=""
+    private var writingMode="Formal"
+    private var translateSource=""
+    private var translateDraftMode=false
+    private var translateDraft=""
+    private var translateSourceChoice=-1
+    private var translateResult=""
+    // Snapshot of the exact preview that completed. Prevent a stale result
+    // being sent after the target, source, engine, or editor has changed.
+    private var previewSource=""
+    private var previewDirection=""
+    private var previewGoogle=false
+    private var translationStatus=""
+    private var translateTarget=0
+    private var googleEasyMode=false
+    private var liveTranslationEnabled=true
+    private var liveRevision=0L
+    private val liveHandler=Handler(Looper.getMainLooper())
+    private var liveSourceView:TextView?=null
+    private var liveResultView:TextView?=null
+    private val codes=listOf("en","ur","sd")
+    private var voiceTargetPackage=""
+    private var pendingSpeech:String?=null
+    private var pendingSpeechSend=false
+    private val speechReceiver=object:BroadcastReceiver() {
+        override fun onReceive(context:Context,intent:Intent) {
+            if(intent.action==KeyPopVoiceActivity.RESULT_ACTION) {
+                val recognized=intent.getStringExtra("text").orEmpty()
+                val requestSend=intent.getBooleanExtra("send",false)
+                if(recognized.isNotBlank()) {
+                    val target=currentInputEditorInfo?.packageName.orEmpty()
+                    if(!sensitive(currentInputEditorInfo) && target==voiceTargetPackage) {
+                        val success=currentInputConnection?.commitText(recognized,1) ?: false
+                        if(success && requestSend) {
+                            val action=(currentInputEditorInfo?.imeOptions ?:0) and
+                                EditorInfo.IME_MASK_ACTION
+                            if(action==EditorInfo.IME_ACTION_SEND)
+                                currentInputConnection?.performEditorAction(action)
+                        }
+                        if(!success) {
+                            pendingSpeech=recognized
+                            pendingSpeechSend=requestSend
+                        }
+                    }else {
+                        pendingSpeech=recognized
+                        pendingSpeechSend=requestSend
+                    }
+                }
+            }
+        }
+    }
+    private var emojiCategory="Faces"
+    private var emojiSearch=false
+    private var emojiQuery=""
+    private var emojiOpen=false
+    private var pinnedOnly=false
+    private var cursorTools=false
+    private var extended=false
+    private var capsLock=false
+    private var lastShiftPress=0L
+    private var current:LinearLayout?=null
+    private var floatingShell:FrameLayout?=null
+    private var characterStrip:KeyPopCharacterStrip?=null
+    private var liveBackground:KeyPopBackdropDrawable?=null
+    private var themeAnimator:android.animation.ValueAnimator?=null
+    private var lastThemeFrame=0L
+    private val emojiRows=listOf(
+        listOf("😀","😁","😂","😍","🥰","😊","😎","😭"),
+        listOf("❤️","👍","👏","🙏","🔥","✨","🎉","✅"),
+        listOf("💯","💪","🤔","😅","😇","🥹","👋","⭐"))
+    private fun sensitive(info:EditorInfo?):Boolean {
+        if(info==null) return true
+        val klass=info.inputType and InputType.TYPE_MASK_CLASS
+        val variation=info.inputType and InputType.TYPE_MASK_VARIATION
+        return klass==InputType.TYPE_NULL ||
+            (info.imeOptions and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING)!=0 ||
+            (klass==InputType.TYPE_CLASS_TEXT &&
+                (variation==InputType.TYPE_TEXT_VARIATION_PASSWORD ||
+                 variation==InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD ||
+                 variation==InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD)) ||
+            (klass==InputType.TYPE_CLASS_NUMBER && variation==InputType.TYPE_NUMBER_VARIATION_PASSWORD)
+    }
+    private fun numeric(info:EditorInfo?):Boolean {
+        val klass=(info?.inputType ?: 0) and InputType.TYPE_MASK_CLASS
+        return klass==InputType.TYPE_CLASS_NUMBER || klass==InputType.TYPE_CLASS_PHONE
+    }
+    private val english=listOf(listOf("q","w","e","r","t","y","u","i","o","p"),
+        listOf("a","s","d","f","g","h","j","k","l"),
+        listOf("z","x","c","v","b","n","m"))
+    private val urdu=listOf(listOf("ق","و","ع","ر","ت","ے","ء","ی","ہ","پ"),
+        listOf("ا","س","د","ف","گ","ح","ج","ک","ل"),
+        listOf("ز","ش","چ","ط","ب","ن","م"))
+    private val sindhi=listOf(listOf("ق","و","ع","ر","ت","ي","ء","ڀ","ه","پ"),
+        listOf("ا","س","د","ف","ڳ","ح","ج","ڪ","ل"),
+        listOf("ز","ش","چ","ٽ","ٻ","ن","م"))
+    private val symbolRows=listOf(listOf("1","2","3","4","5","6","7","8","9","0"),
+        listOf("@","#","$","%","&","-","+","(",")","/"),
+        listOf("*","\"","'",";",":","!","?","_","="))
+    private val extraSymbols=listOf(listOf("~","€","£","¥","•","√","π","÷","×","∆"),
+        listOf("{","}","[","]","<",">","©","®","™","✓"),
+        listOf("،","؛","؟","«","»","–","—","…","°"))
+    private val urduExtended=listOf(
+        listOf("آ","أ","إ","ث","ٹ","ڈ","ڑ","ژ","ذ","ظ"),
+        listOf("ض","غ","خ","ھ","ؤ","ئ","ة","ۃ","ً","ٰ"),
+        listOf("ِ","ُ","َ","ْ","ّ","،","؟","؛","ء","ٓ"))
+    private val sindhiExtended=listOf(
+        listOf("آ","ٻ","ڀ","ٿ","ٽ","ٺ","ڄ","جھ","ڃ","ڇ"),
+        listOf("ڌ","ڏ","ڊ","ڍ","ڙ","ژ","ڦ","ک","ڳ","گھ"),
+        listOf("ڻ","ؤ","ھ","ء","ئ","و","ي","ه","ا","ب"))
+
+    private val clipListener=ClipboardManager.OnPrimaryClipChangedListener {
+        if (!sensitive(currentInputEditorInfo) && prefs.getBoolean("history",false)) {
+            try {
+                val clip=clipboard.primaryClip
+                val markedSensitive=Build.VERSION.SDK_INT>=33 &&
+                    clip?.description?.extras?.getBoolean("android.content.extra.IS_SENSITIVE")==true
+                if(clip!=null && clip.itemCount>0 && !markedSensitive) {
+                    // Preserve ALL text items from every observed copy event,
+                    // including repeated copies; no number/age eviction.
+                    if(clip.description.hasMimeType("text/*")) {
+                        val copies=(0 until clip.itemCount).mapNotNull {
+                            clip.getItemAt(it).text?.toString()?.takeIf(String::isNotBlank)
+                        }
+                        if(copies.isNotEmpty())clipExecutor.execute {
+                            copies.forEach {runCatching{clipStore.save(it)}}
+                        }
+                    }
+                    // Images are separately opt-in to avoid silently archiving
+                    // private screenshots while the keyboard is visible.
+                    if(clip.description.hasMimeType("image/*") &&
+                        prefs.getBoolean("historyImages",false)) {
+                        val uris=(0 until clip.itemCount).mapNotNull {clip.getItemAt(it).uri}
+                        if(uris.isNotEmpty())clipExecutor.execute {
+                            uris.forEach {runCatching{KeyPopImageStore(this).save(it)}}
+                        }
+                    }
+                }
+            } catch (_:Exception) { /* Never break typing on inaccessible clipboard. */ }
+        }
+        if(!sensitive(currentInputEditorInfo))refreshRecentScreenshotAsync()
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        window.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
+        window.window?.navigationBarColor=0xFF101827.toInt()
+        if(Build.VERSION.SDK_INT>=29)window.window?.isNavigationBarContrastEnforced=true
+        val filter=IntentFilter(KeyPopVoiceActivity.RESULT_ACTION)
+        androidx.core.content.ContextCompat.registerReceiver(
+            this,speechReceiver,filter,androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
+        clipboard.addPrimaryClipChangedListener(clipListener)
+        prefs.registerOnSharedPreferenceChangeListener(suggestionPrefsListener)
+        // Load the ~39k-word prediction index on its own executor. Never
+        // make the Space key perform first-use disk I/O or file parsing.
+        // Defer the one-off 39k-word index build until the keyboard has had
+        // a chance to show its first frame.
+        predictionHandler.postDelayed({
+            if(!predictionExecutor.isShutdown)
+                predictionExecutor.execute {runCatching{lexicon.warmup()}}
+        },300L)
+    }
+
+    override fun onDestroy() {
+        stopBackspaceRepeating()
+        stopLiveTranslation()
+        screenshotRefreshToken++
+        stopScreenshotObserver()
+        themeAnimator?.cancel();themeAnimator=null;liveBackground=null
+        try { unregisterReceiver(speechReceiver) } catch(_:Exception) {}
+        try { clipboard.removePrimaryClipChangedListener(clipListener) } catch(_:Exception) {}
+        inputViewActive=false
+        prefs.unregisterOnSharedPreferenceChangeListener(suggestionPrefsListener)
+        cancelSuggestionWork()
+        predictionExecutor.shutdownNow()
+        personalLearningExecutor.shutdownNow()
+        imagePreviewExecutor.shutdownNow()
+        screenshotArchiveExecutor.shutdownNow()
+        adaptiveController.close()
+        super.onDestroy()
+    }
+
+    private fun navBottomFromInsets(insets:WindowInsetsCompat?):Int {
+        if(insets==null)return 0
+        val bars=WindowInsetsCompat.Type.navigationBars()
+        return maxOf(insets.getInsets(bars).bottom,
+            runCatching{insets.getInsetsIgnoringVisibility(bars).bottom}.getOrDefault(0))
+    }
+    /** Some OEM IME windows initially report zero navbar insets and later
+     * report the actual 3-button navbar. Keep the biggest safe value for the
+     * current orientation instead of oscillating below the system controls. */
+    private fun navigationFloorPx():Int {
+        val minimum=d(14)
+        return runCatching {
+            val id=resources.getIdentifier("config_navBarInteractionMode","integer","android")
+            val threeButton=id!=0 && resources.getInteger(id)==0
+            if(!threeButton)return@runCatching minimum
+            val heightId=resources.getIdentifier("navigation_bar_height","dimen","android")
+            if(heightId==0)return@runCatching d(48)
+            resources.getDimensionPixelSize(heightId).coerceIn(d(24),d(64))
+        }.getOrDefault(minimum)
+    }
+    private fun applyNavigationInsets(insets:WindowInsetsCompat?=null) {
+        val shell=floatingShell ?:return
+        val orientation=resources.configuration.orientation
+        if(lastImeOrientation!=orientation) {
+            lastImeOrientation=orientation
+            navSafeBottomPx=0
+        }
+        val reported=maxOf(navBottomFromInsets(insets),
+            navBottomFromInsets(ViewCompat.getRootWindowInsets(shell)),
+            navBottomFromInsets(window.window?.decorView?.let {
+                ViewCompat.getRootWindowInsets(it)
+            }))
+        val safe=KeyboardSizingRules.stableSafeBottom(
+            navSafeBottomPx,reported,navigationFloorPx())
+        if(safe!=navSafeBottomPx || shell.paddingBottom!=safe) {
+            navSafeBottomPx=safe
+            shell.setPadding(0,0,0,safe)
+            shell.requestLayout()
+        }
+    }
+    override fun onCreateInputView():View {
+        // A teal Gboard theme must not silently keep the unrelated Custom geometry.
+        // Keep explicit non-Gboard presets; migrate legacy teal theme once.
+        if(!prefs.getBoolean("gboardLayoutMigration20261107",false)) {
+            val oldPreset=prefs.getInt("keyboardPreset",KeyboardPresetCatalog.CUSTOM)
+            if(!prefs.contains("keyboardPreset") ||
+                (oldPreset==KeyboardPresetCatalog.CUSTOM &&
+                    prefs.getInt("theme",0)==10))
+                KeyboardPresetCatalog.apply(this,KeyboardPresetCatalog.MATERIAL)
+            prefs.edit().putBoolean("gboardLayoutMigration20261107",true).apply()
+        }
+        language=prefs.getInt("language",0).coerceIn(0,2)
+        liveTranslationEnabled=prefs.getBoolean("liveTranslateDefault",true)
+        navSafeBottomPx=0
+        lastImeOrientation=resources.configuration.orientation
+        floatingShell=FrameLayout(this).apply{
+            setBackgroundColor(Color.TRANSPARENT)
+            // Reserve an initial safe bottom before asynchronous insets arrive.
+            navSafeBottomPx=navigationFloorPx()
+            setPadding(0,0,0,navSafeBottomPx)
+        }
+        current=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL}
+        val shell=floatingShell!!
+        characterStrip=KeyPopCharacterStrip(this,shell)
+        shell.addView(current,FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM))
+        ViewCompat.setOnApplyWindowInsetsListener(shell) { _,insets ->
+            applyNavigationInsets(insets)
+            insets
+        }
+        shell.addOnAttachStateChangeListener(object:View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(v:View) {
+                // requestApplyInsets before attachment is ignored on some
+                // Redmi / Android 15 IME sessions.
+                ViewCompat.requestApplyInsets(v)
+                v.post {applyNavigationInsets()}
+            }
+            override fun onViewDetachedFromWindow(v:View) = Unit
+        })
+        shell.post {
+            ViewCompat.requestApplyInsets(shell)
+            applyNavigationInsets()
+        }
+        draw()
+        return shell
+    }
+    override fun onUpdateSelection(oldSelStart:Int,oldSelEnd:Int,newSelStart:Int,newSelEnd:Int,candidatesStart:Int,candidatesEnd:Int) {
+        super.onUpdateSelection(oldSelStart,oldSelEnd,newSelStart,newSelEnd,candidatesStart,candidatesEnd)
+        if(!inputViewActive)return
+        hasSelectedRange=newSelStart>=0 && newSelEnd>newSelStart
+        lastKnownSelection=newSelStart.takeIf{newSelStart==newSelEnd && it>=0}
+        val ourEdit=editorContext.selectionChanged(newSelStart,newSelEnd)
+        adaptiveController.invalidateSession()
+
+        // press() already scheduled the prediction for our own edits.
+        // Cursor moves, selections and external app edits need a fresh snapshot.
+        if(!ourEdit) {
+            latestSpaceAdvice=null
+            requestSuggestionRefresh(18)
+            scheduleLiveTranslation()
+        }
+    }
+
+    override fun onFinishInputView(finishingInput:Boolean) {
+        adaptiveEditorEpoch++
+        adaptiveController.invalidateSession()
+        inputViewActive=false
+        cancelSuggestionWork()
+        suggestionBar?.visibility=View.GONE
+        editorContext.clear()
+        pendingSuggestionBoundary=null
+        hasSelectedRange=false
+        lastKnownSelection=null
+        latestSpaceAdvice=null
+        KeyPopDiagnostics.observeContextCache(this,contextCacheHits,contextCacheMisses)
+        contextCacheHits=0
+        contextCacheMisses=0
+        stopScreenshotObserver()
+        lastAppliedCorrection=null
+        lastRejectedCorrection=null
+        stopBackspaceRepeating()
+        screenshotSlot=null
+        stopLiveTranslation()
+        themeAnimator?.pause()
+        KeyPopDiagnostics.flush(this)
+        if(!predictionExecutor.isShutdown)predictionExecutor.execute {
+            runCatching{personalLanguage.dropCandidateCache()}
+        }
+        super.onFinishInputView(finishingInput)
+    }
+
+    override fun onStartInputView(info:EditorInfo?,restarting:Boolean) {
+        adaptiveEditorEpoch++
+        adaptiveController.invalidateSession()
+        editorContext.clear()
+        pendingSuggestionBoundary=null
+        latestSpaceAdvice=null
+        hasSelectedRange=info!=null && info.initialSelStart>=0 &&
+            info.initialSelEnd>info.initialSelStart
+        lastKnownSelection=info?.initialSelStart?.takeIf{it>=0}
+        lastAppliedCorrection=null
+        lastRejectedCorrection=null
+        val viewStart=SystemClock.elapsedRealtimeNanos()
+        super.onStartInputView(info,restarting)
+        inputViewActive=true
+        stopLiveTranslation()
+        stopBackspaceRepeating()
+        clipsOpen=false;emojiOpen=false;cursorTools=false;translatorOpen=false;writingOpen=false
+        googleEasyMode=false
+        toolsOpen=false;resizeOpen=false
+        shift=false;capsLock=false
+        val pending=pendingSpeech
+        if(pending!=null && !sensitive(info) && info?.packageName==voiceTargetPackage) {
+            val inserted=currentInputConnection?.commitText(pending,1) ?: false
+            if(inserted){
+                pendingSpeech=null
+                if(pendingSpeechSend) {
+                    val action=(info?.imeOptions ?:0) and EditorInfo.IME_MASK_ACTION
+                    if(action==EditorInfo.IME_ACTION_SEND)
+                        currentInputConnection?.performEditorAction(action)
+                }
+                pendingSpeechSend=false
+            }
+        } else if(pending!=null && info?.packageName!=voiceTargetPackage) {
+            pendingSpeech=null;pendingSpeechSend=false
+        }
+        draw()
+        startScreenshotObserver()
+        floatingShell?.post {
+            floatingShell?.let { ViewCompat.requestApplyInsets(it) }
+            applyNavigationInsets()
+        }
+        refreshRecentScreenshotAsync()
+        KeyPopDiagnostics.observeKeyboardBuild(this,SystemClock.elapsedRealtimeNanos()-viewStart)
+    }
+
+    private fun d(v:Int)=(v*resources.displayMetrics.density).toInt()
+    private fun gradient(a:Int,b:Int,r:Int,stroke:Int?=null):GradientDrawable=
+        GradientDrawable(GradientDrawable.Orientation.TL_BR,intArrayOf(a,b)).apply {
+            cornerRadius=d(r).toFloat()
+            if(stroke!=null) setStroke(d(1),stroke)
+        }
+    private fun palette()=renderSkin ?: KeyPopSkins.active(this)
+    private fun tapFeedback(v:View) {
+        if(prefs.getBoolean("haptics",false)) v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+        if(prefs.getBoolean("sound",false))
+            (getSystemService(Context.AUDIO_SERVICE) as AudioManager).playSoundEffect(AudioManager.FX_KEY_CLICK)
+    }
+    private fun makeKey(label:String,heavy:Boolean=false,weight:Float=1f,action:()->Unit):Button {
+        val s=palette()
+        val round=KeyPopSkins.radius(s,prefs.getInt("round",13)).toInt().coerceIn(1,40)
+        val prototype=if(heavy)primaryKeyBackground else regularKeyBackground
+        val bg=prototype?.constantState?.newDrawable()?.mutate()
+            ?:KeyPopGlass.key(this,s,heavy)
+        return KeyPopHintKey(this).apply {
+            text=label
+            textSize=if(label.length>3) {
+                (prefs.getInt("font",19)*0.70f).coerceIn(12f,24f)
+            } else prefs.getInt("font",19).coerceIn(12,32).toFloat()
+            isAllCaps=false
+            setTextColor(if(heavy) Color.WHITE else s.ink)
+            typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL)
+            gravity=Gravity.CENTER
+            background=android.graphics.drawable.RippleDrawable(
+                android.content.res.ColorStateList.valueOf((s.accent and 0x00FFFFFF) or (0x44 shl 24)),
+                bg,null)
+            minWidth=0; minimumWidth=0; minHeight=0; minimumHeight=0
+            setPadding(0,0,0,0)
+            elevation=d(if(KeyPopSkins.index(this@AetherImeService)==10)0 else 2).toFloat()
+            setOnClickListener { tapFeedback(this); action() }
+        }
+    }
+    private fun chip(label:String,weight:Float=1f,onTap:()->Unit):Button {
+        val s=palette()
+        return Button(this).apply {
+            text=label; textSize=11f; isAllCaps=false
+            setTextColor(s.ink); minWidth=0; minimumWidth=0; minHeight=0; minimumHeight=0
+            background=KeyPopGlass.panel(this@AetherImeService,s)
+            setPadding(0,0,0,0)
+            setOnClickListener { tapFeedback(this); onTap() }
+        }
+    }
+    /** Consistent vector toolbar buttons: no font-dependent emoji or costly glass layers. */
+    private fun toolbarIcon(kind:KeyPopToolbarGlyph.Kind,description:String,
+        onTap:()->Unit):ImageButton {
+        val skin=palette()
+        return ImageButton(this).apply {
+            scaleType=ImageView.ScaleType.FIT_CENTER
+            setImageDrawable(KeyPopToolbarGlyph(kind,skin.ink))
+            background=android.graphics.drawable.RippleDrawable(
+                android.content.res.ColorStateList.valueOf(
+                    (skin.accent and 0x00FFFFFF) or (0x33 shl 24)),
+                gradient(skin.surface,skin.surface,11),null)
+            setPadding(d(8),d(7),d(8),d(7))
+            minimumWidth=d(40)
+            minimumHeight=d(40)
+            contentDescription=description
+            isFocusable=true
+            setOnClickListener{tapFeedback(this);onTap()}
+        }
+    }
+    private fun applyFloatingLayout() {
+        val root=current ?:return
+        val shell=floatingShell ?:return
+        val floating=prefs.getBoolean("floating",false)
+        val screenWidth=resources.displayMetrics.widthPixels
+        val percent=prefs.getInt("keyboardWidthPercent",100).coerceIn(65,100)
+        val width=(screenWidth*percent/100f).toInt().coerceAtLeast(d(220))
+            .coerceAtMost(screenWidth)
+        val x=if(floating)prefs.getInt("floatX",0).coerceIn(-d(75),d(75)) else 0
+        val left=((screenWidth-width)/2+x).coerceIn(0,(screenWidth-width).coerceAtLeast(0))
+        val lift=prefs.getInt("bottomLift",0).coerceIn(0,96)
+        val params=(root.layoutParams as? FrameLayout.LayoutParams)
+            ?:FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM)
+        params.width=if(percent>=100 && !floating)-1 else width
+        params.leftMargin=if(percent>=100 && !floating)0 else left
+        params.bottomMargin=d(lift+if(floating)prefs.getInt("floatY",16).coerceIn(0,90) else 0)
+        params.gravity=Gravity.BOTTOM or Gravity.LEFT
+        // Never force a large minimum height on floating/docked mode switches.
+        shell.minimumHeight=0
+        root.elevation=if(floating)d(14).toFloat() else 0f
+        root.layoutParams=params
+        shell.requestLayout()
+    }
+    /** In-place resizing avoids detaching the gesture target during a drag. */
+    private fun showResizePanel(root:LinearLayout) {
+        val skin=palette()
+        // The full keyboard is intentionally replaced by the controls. Keep
+        // this lightweight canvas pinned so resizing stays visible on every drag.
+        val preview=KeyPopSizingPreview(this)
+        root.addView(preview,LinearLayout.LayoutParams(-1,d(160)))
+        val panel=LinearLayout(this).apply {
+            orientation=LinearLayout.VERTICAL
+            setPadding(d(8),d(8),d(8),d(8))
+            background=gradient(skin.surface,skin.background,12,skin.accent)
+        }
+        val title=TextView(this).apply{
+            text="Quick resize"
+            textSize=12f;setTextColor(skin.ink)
+        }
+        panel.addView(title)
+        val handle=chip("Drag to change key height") {}
+        handle.contentDescription="Hold and drag vertically to resize the keyboard"
+        var downY=0f
+        var startHeight=51
+        handle.setOnTouchListener { _,event ->
+            when(event.actionMasked) {
+                MotionEvent.ACTION_DOWN ->{
+                    downY=event.rawY
+                    startHeight=prefs.getInt("height",51).coerceIn(36,90)
+                    true
+                }
+                MotionEvent.ACTION_MOVE ->{
+                    val next=(startHeight+(downY-event.rawY)/resources.displayMetrics.density/3f)
+                        .toInt().coerceIn(36,90)
+                    if(prefs.getInt("height",51)!=next){
+                        prefs.edit().putInt("height",next).apply()
+                        preview.refresh()
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP ->true
+                MotionEvent.ACTION_CANCEL ->true
+                else ->false
+            }
+        }
+        panel.addView(handle,LinearLayout.LayoutParams(-1,d(45)).apply{topMargin=d(6)})
+        if(prefs.getBoolean("floating",false)) {
+            val move=chip("Drag to move keyboard") {}
+            move.contentDescription="Drag to reposition the floating keyboard"
+            var firstX=0f;var firstY=0f
+            var initialX=0;var initialY=0
+            move.setOnTouchListener { _,event ->
+                when(event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        firstX=event.rawX;firstY=event.rawY
+                        initialX=prefs.getInt("floatX",0)
+                        initialY=prefs.getInt("floatY",16)
+                        true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        val dx=(event.rawX-firstX).toInt()
+                        val dy=(event.rawY-firstY)/resources.displayMetrics.density
+                        prefs.edit().putInt("floatX",(initialX+dx).coerceIn(-d(75),d(75)))
+                            .putInt("floatY",(initialY-dy.toInt()).coerceIn(0,90)).apply()
+                        applyFloatingLayout()
+                        true
+                    }
+                    MotionEvent.ACTION_UP ->true
+                    MotionEvent.ACTION_CANCEL ->true
+                    else ->false
+                }
+            }
+            panel.addView(move,LinearLayout.LayoutParams(-1,d(42)).apply{topMargin=d(4)})
+        }
+        panel.addView(chip("Size & keys settings") {
+            startActivity(Intent(this,MainActivity::class.java)
+                .putExtra("openSection","designSize")
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP))
+        },LinearLayout.LayoutParams(-1,d(44)).apply{topMargin=d(6)})
+        val actions=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
+        fun action(label:String,weight:Float,fn:()->Unit){
+            actions.addView(chip(label,onTap=fn),LinearLayout.LayoutParams(0,d(40),weight).apply{
+                rightMargin=d(4)
+            })
+        }
+        action("Floating: "+(if(prefs.getBoolean("floating",false))"On" else "Off"),1.3f){
+            val activate=!prefs.getBoolean("floating",false)
+            val e=prefs.edit().putBoolean("floating",activate)
+            if(activate && prefs.getInt("keyboardWidthPercent",100)==100)
+                e.putInt("keyboardWidthPercent",85)
+            e.apply()
+            draw()
+        }
+        action("Done",1f){resizeOpen=false;draw()}
+        panel.addView(actions)
+        val available=resources.displayMetrics.heightPixels
+        val panelHeight=KeyboardSizingRules.boundedPanelHeight(available,
+            d(if(prefs.getBoolean("floating",false))216 else 168))
+        root.addView(ScrollView(this).apply {
+            isFillViewport=false
+            overScrollMode=View.OVER_SCROLL_IF_CONTENT_SCROLLS
+            addView(panel)
+        },LinearLayout.LayoutParams(-1,panelHeight))
+    }
+    private fun updateThemeAnimation() {
+        val enabled=prefs.getBoolean("animatedThemes",false) &&
+            android.animation.ValueAnimator.areAnimatorsEnabled()
+        if(!enabled) {
+            themeAnimator?.cancel();themeAnimator=null
+            liveBackground?.phase=0f
+            return
+        }
+        if(themeAnimator==null) {
+            themeAnimator=android.animation.ValueAnimator.ofFloat(0f,1f).apply {
+                duration=8000L
+                repeatCount=android.animation.ValueAnimator.INFINITE
+                repeatMode=android.animation.ValueAnimator.RESTART
+                addUpdateListener {
+                    val time=SystemClock.uptimeMillis()
+                    // Animation stays paused while keys are actively tapped.
+                    // Do not compete with text rendering for the main thread.
+                    if(time-lastThemeFrame>=115L &&
+                        time-lastKeyboardTouchAt>550L) {
+                        lastThemeFrame=time
+                        liveBackground?.phase=it.animatedValue as Float
+                    }
+                }
+                start()
+            }
+        } else if(themeAnimator?.isPaused==true)themeAnimator?.resume()
+    }
+
+    /** Screenshots saved by Android normally do NOT change the clipboard.
+     * Observe MediaStore while the keyboard is visible, without polling. */
+    private fun startScreenshotObserver() {
+        stopScreenshotObserver()
+        if(sensitive(currentInputEditorInfo) ||
+            !prefs.getBoolean("autoScreenshotSuggestions",true) ||
+            !KeyPopRecentScreenshots.granted(this))return
+        val observer=object:ContentObserver(predictionHandler) {
+            override fun onChange(selfChange:Boolean) {
+                screenshotDebounce?.let {predictionHandler.removeCallbacks(it)}
+                val task=Runnable {refreshRecentScreenshotAsync()}
+                screenshotDebounce=task
+                predictionHandler.postDelayed(task,400)
+            }
+        }
+        try {
+            contentResolver.registerContentObserver(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,true,observer)
+            screenshotObserver=observer
+        }catch(_:Exception) {}
+    }
+    private fun stopScreenshotObserver() {
+        screenshotDebounce?.let {predictionHandler.removeCallbacks(it)}
+        screenshotDebounce=null
+        screenshotObserver?.let{runCatching{contentResolver.unregisterContentObserver(it)}}
+        screenshotObserver=null
+    }
+    /** The system screenshot folder is NOT the Android clipboard. After
+     * explicit permission/consent, archive distinct screenshots locally so
+     * they show in KeyPop's encrypted image history as well as the offer.
+     * Never do MediaStore scans or encryption on the keypress/UI thread. */
+    private fun archiveRecentScreenshots() {
+        if(!KeyPopRecentScreenshots.granted(this) ||
+            !prefs.getBoolean("autoScreenshotArchive",false) ||
+            sensitive(currentInputEditorInfo))return
+        val now=SystemClock.uptimeMillis()
+        if(now-lastArchiveRequest<800L ||
+            !screenshotArchiveRunning.compareAndSet(false,true))return
+        lastArchiveRequest=now
+        screenshotArchiveExecutor.execute {
+            try {
+                val state=getSharedPreferences("keypop_screenshot_archive",Context.MODE_PRIVATE)
+                val seen=state.getStringSet("savedUris",emptySet()).orEmpty().toMutableSet()
+                // On reopening after an inactive period, catch up from
+                // the most recent successful scan (up to seven days).
+                val elapsed=if(state.contains("lastScan"))
+                    (System.currentTimeMillis()-state.getLong("lastScan",0L))
+                        .coerceAtLeast(0L)/1000L+600L
+                    else 7L*24L*60L*60L
+                val clips=KeyPopRecentScreenshots.recent(this,
+                    elapsed.coerceIn(3600L,7L*24L*60L*60L),200).asReversed()
+                var changed=false
+                val store=KeyPopImageStore(this)
+                for(uri in clips) {
+                    val key=uri.toString()
+                    if(key in seen)continue
+                    // If Android still writes a screenshot, retry it when the
+                    // next content observer event or keyboard session arrives.
+                    if(runCatching{store.save(uri)}.getOrDefault(false)) {
+                        seen.add(key)
+                        changed=true
+                    }
+                }
+                if(changed) {
+                    // No history eviction: the encrypted images remain until
+                    // explicitly removed. This small key cache only prevents
+                    // duplicate imports from the recent MediaStore lookback.
+                    state.edit().putStringSet("savedUris",
+                        seen.toList().takeLast(1000).toSet()).apply()
+                }
+                state.edit().putLong("lastScan",
+                    System.currentTimeMillis()).apply()
+            } catch(_:Exception) {
+                // A storage error must never block typing or clear history.
+            } finally {
+                screenshotArchiveRunning.set(false)
+            }
+        }
+    }
+    /** Refresh on screenshot media change, keyboard open or clipboard change. */
+    private fun refreshRecentScreenshotAsync() {
+        archiveRecentScreenshots()
+        if(sensitive(currentInputEditorInfo)) {
+            recentScreenshotUri=null
+            return
+        }
+        val token=++screenshotRefreshToken
+        imagePreviewExecutor.execute {
+            var uri:Uri?=null
+            var mime="image/png"
+            runCatching {
+                val clip=clipboard.primaryClip
+                val markedSensitive=Build.VERSION.SDK_INT>=33 &&
+                    clip?.description?.extras?.getBoolean("android.content.extra.IS_SENSITIVE")==true
+                if(clip!=null && clip.itemCount>0 &&
+                    clip.description.hasMimeType("image/*") && !markedSensitive) {
+                    uri=clip.getItemAt(0).uri
+                    if(uri!=null)mime=contentResolver.getType(uri)?:"image/png"
+                }
+            }
+            if(uri==null)runCatching {
+                uri=KeyPopRecentScreenshots.latest(this)
+                if(uri!=null)mime=contentResolver.getType(uri)?:"image/png"
+            }
+            val found=uri
+            Handler(Looper.getMainLooper()).post {
+                if(token==screenshotRefreshToken && !sensitive(currentInputEditorInfo) &&
+                    current!=null) {
+                    val visible=found?.takeUnless {it==dismissedScreenshotUri}
+                    val changed=recentScreenshotUri!=visible
+                    recentScreenshotUri=visible
+                    screenshotMime=mime
+                    if(changed)updateScreenshotStrip()
+                }
+            }
+        }
+    }
+    /** Screenshot updates must never re-create the key grid while typing.
+     * Change only the small preview strip just above the persistent toolbar. */
+    private fun updateScreenshotStrip() {
+        val slot=screenshotSlot ?:return
+        slot.removeAllViews()
+        if(!sensitive(currentInputEditorInfo) && !numeric(currentInputEditorInfo))
+            recentScreenshotUri?.let{showScreenshotOffer(slot,it,screenshotMime)}
+    }
+    /** Paste in the current editor whenever it explicitly accepts image content.
+     * Never silently open the system share chooser in another application. */
+    private fun insertRecentScreenshot(uri:Uri,mime:String) {
+        if(sensitive(currentInputEditorInfo))return
+        val info=InputContentInfo(uri,ClipDescription("Recent screenshot",arrayOf(mime)),null)
+        val inserted=runCatching {
+            currentInputConnection?.commitContent(info,
+                InputConnection.INPUT_CONTENT_GRANT_READ_URI_PERMISSION,null)==true
+        }.getOrDefault(false)
+        if(inserted)return
+        runCatching {
+            clipboard.setPrimaryClip(ClipData.newUri(contentResolver,"Screenshot",uri))
+            Toast.makeText(this,"Image copied. Use Paste or Attach in this app.",
+                Toast.LENGTH_LONG).show()
+        }.onFailure {
+            Toast.makeText(this,"This app does not support pasting screenshots.",
+                Toast.LENGTH_LONG).show()
+        }
+    }
+    private fun shareRecentScreenshot(uri:Uri,mime:String) {
+        try {
+            val share=Intent(Intent.ACTION_SEND).apply {
+                type=mime;putExtra(Intent.EXTRA_STREAM,uri)
+                clipData=ClipData.newUri(contentResolver,"Screenshot",uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(Intent.createChooser(share,"Share screenshot")
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }catch(_:Exception){
+            Toast.makeText(this,"Screenshot cannot be shared",Toast.LENGTH_SHORT).show()
+        }
+    }
+    /** A full rectangular preview with CENTER_CROP stays in the screenshot
+     * strip; it never displaces an unrelated toolbar key. */
+    private fun showScreenshotPreview(image:ImageView,uri:Uri) {
+        imagePreviewExecutor.execute {
+            val bitmap=runCatching {
+                contentResolver.openInputStream(uri)?.use {
+                    BitmapFactory.decodeStream(it,null,BitmapFactory.Options().apply {
+                        inSampleSize=4
+                        inPreferredConfig=android.graphics.Bitmap.Config.RGB_565
+                    })
+                }
+            }.getOrNull()?:return@execute
+            Handler(Looper.getMainLooper()).post {
+                if(recentScreenshotUri==uri && image.isAttachedToWindow)
+                    image.setImageBitmap(bitmap)
+                else bitmap.recycle()
+            }
+        }
+    }
+    private fun showScreenshotOffer(root:LinearLayout,uri:Uri,mime:String) {
+        val style=palette()
+        val strip=LinearLayout(this).apply {
+            orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL
+            setPadding(d(6),d(3),d(6),d(3))
+            background=gradient(style.surface,style.background,10)
+        }
+        val thumbnail=ImageView(this).apply {
+            contentDescription="Just captured screenshot: tap to paste"
+            scaleType=ImageView.ScaleType.CENTER_CROP
+            setBackgroundColor(style.background)
+            setOnClickListener{insertRecentScreenshot(uri,mime)}
+        }
+        strip.addView(thumbnail,LinearLayout.LayoutParams(d(65),d(45)).apply {
+            rightMargin=d(5)
+        })
+        val caption=TextView(this).apply {
+            text="Screenshot";textSize=11f;setTextColor(style.ink)
+            maxLines=1;ellipsize=android.text.TextUtils.TruncateAt.END
+        }
+        strip.addView(caption,LinearLayout.LayoutParams(0,d(45),1f))
+        val paste=chip("Paste") {insertRecentScreenshot(uri,mime)}
+        paste.contentDescription="Paste screenshot if the current app supports image insertion"
+        strip.addView(paste,LinearLayout.LayoutParams(d(55),d(42)))
+        val share=chip("Share") {shareRecentScreenshot(uri,mime)}
+        strip.addView(share,LinearLayout.LayoutParams(d(55),d(42)))
+        strip.addView(chip("Save") {
+            imagePreviewExecutor.execute {
+                val stored=runCatching{KeyPopImageStore(this).save(uri)}.getOrDefault(false)
+                predictionHandler.post {
+                    Toast.makeText(this,if(stored)"Saved in encrypted image archive"
+                        else "Could not save screenshot",Toast.LENGTH_SHORT).show()
+                }
+            }
+        },LinearLayout.LayoutParams(d(51),d(42)))
+        strip.addView(chip("×") {
+            dismissedScreenshotUri=uri
+            recentScreenshotUri=null
+            updateScreenshotStrip()
+        }.apply{contentDescription="Dismiss this screenshot offer"},
+            LinearLayout.LayoutParams(d(32),d(42)))
+        root.addView(strip,LinearLayout.LayoutParams(-1,d(56)))
+        showScreenshotPreview(thumbnail,uri)
+    }
+
+    private fun draw() {
+        val root=current ?: return
+        characterStrip?.dismiss()
+        root.removeAllViews()
+        screenshotSlot=null
+        suggestionBar=null
+        suggestionToolbar=null
+        cancelSuggestionWork()
+        keyViews.clear()
+        val s=KeyPopSkins.active(this)
+        renderSkin=s
+        regularKeyBackground=KeyPopGlass.key(this,s,false)
+        primaryKeyBackground=KeyPopGlass.key(this,s,true)
+        // Fill the whole IME shell, including navigation-safe padding, with
+        // the same tone as the keyboard; rounded panels must not expose white.
+        floatingShell?.setBackgroundColor(if(prefs.getBoolean("floating",false))
+            Color.TRANSPARENT else s.background)
+        window.window?.navigationBarColor=s.background
+        if(Build.VERSION.SDK_INT>=29)
+            window.window?.isNavigationBarContrastEnforced=false
+        val keyboardBackdrop=KeyPopBackdropDrawable(KeyPopSkins.index(this),s)
+        liveBackground=keyboardBackdrop
+        root.background=if(KeyPopSkins.index(this)==10)KeyPopGlass.background(this,s)
+            else keyboardBackdrop
+        updateThemeAnimation()
+        root.setPadding(d(2),d(4),d(2),d(5))
+        applyFloatingLayout()
+        val preset=KeyboardPresetCatalog.selected(this)
+        val secure=sensitive(currentInputEditorInfo)
+        val isNumeric=numeric(currentInputEditorInfo)
+        // Toolbar/key contents follow the keyset; geometry and theme never
+        // implicitly switch a Gboard-style keyset to a Samsung/SwiftKey one.
+        val materialToolbar=KeyPopKeysets.selectedId(this)==KeyPopKeysets.GBOARD &&
+            !secure && !isNumeric
+        // Gboard-style arrangement: live translator above the persistent
+        // utilities row; compact preview updates without rebuilding keys.
+        if(translatorOpen && !secure && !isNumeric &&
+            prefs.getBoolean("compactTranslate",true))showTranslator(root)
+        if(!secure && !isNumeric && prefs.getBoolean("screenshotClipOffer",true)) {
+            val slot=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL}
+            screenshotSlot=slot
+            root.addView(slot,LinearLayout.LayoutParams(-1,-2))
+            if(!KeyPopRecentScreenshots.granted(this) &&
+                prefs.getBoolean("autoScreenshotSuggestions",true)) {
+                slot.addView(chip("📷 Enable screenshot previews and history") {
+                    startActivity(Intent(this,KeyPopScreenshotAccessActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                },LinearLayout.LayoutParams(-1,d(34)))
+            } else recentScreenshotUri?.let{showScreenshotOffer(slot,it,screenshotMime)}
+        }
+        if(materialToolbar) {
+            val top=LinearLayout(this).apply {
+                orientation=LinearLayout.HORIZONTAL
+                gravity=Gravity.CENTER_VERTICAL
+                setPadding(d(3),d(1),d(3),d(1))
+            }
+            fun iconAction(kind:KeyPopToolbarGlyph.Kind,description:String,fn:()->Unit) {
+                val button=toolbarIcon(kind,description,fn)
+                top.addView(button,LinearLayout.LayoutParams(0,d(43),1f).apply {
+                    leftMargin=d(2);rightMargin=d(2)
+                })
+            }
+            iconAction(KeyPopToolbarGlyph.Kind.GRID,"Open keyboard tools"){
+                toolsOpen=!toolsOpen;if(toolsOpen)toolsPage=0;resizeOpen=false;draw()
+            }
+            iconAction(KeyPopToolbarGlyph.Kind.CLIPBOARD,"Open clipboard history"){
+                clipsOpen=!clipsOpen;emojiOpen=false;toolsOpen=false;resizeOpen=false;draw()
+            }
+            iconAction(KeyPopToolbarGlyph.Kind.SCREENSHOT,"Open screenshot history or set up access"){
+                startActivity(Intent(this,
+                    if(KeyPopRecentScreenshots.granted(this))
+                        KeyPopScreenshotHistoryActivity::class.java
+                    else KeyPopScreenshotAccessActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            }
+            iconAction(KeyPopToolbarGlyph.Kind.SETTINGS,"Open organized keyboard settings"){
+                startActivity(Intent(this,MainActivity::class.java)
+                    .putExtra("openSection","settingsHome")
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP))
+            }
+            iconAction(KeyPopToolbarGlyph.Kind.TRANSLATE,"Translate text"){
+                translatorOpen=!translatorOpen;writingOpen=false;emojiOpen=false
+                clipsOpen=false;toolsOpen=false;resizeOpen=false
+                if(translatorOpen) {
+                    translateDraftMode=false
+                    val existing=editorTranslationText()
+                    // Composition must remain visible at the actual app cursor.
+                    translateDraftMode=false
+                    translateDraft=""
+                    translateSource=if(translateDraftMode)"" else existing
+                    translateSourceChoice=-1
+                    translateResult="";translationStatus=""
+                    googleEasyMode=KeyPopCloudTranslation.configured(this) &&
+                        prefs.getBoolean("googleCloudConsent",false)
+                    val detected=KeyPopTextLanguage.detect(translateSource,language)
+                    translateTarget=prefs.getInt("autoTarget",if(detected==2)0 else 2).coerceIn(0,2)
+                    if(translateTarget==detected)translateTarget=if(detected==2)0 else 2
+                }
+                draw()
+                if(translatorOpen) scheduleLiveTranslation(80)
+            }
+            iconAction(KeyPopToolbarGlyph.Kind.THEMES,"Open keyboard theme settings"){
+                startActivity(Intent(this,MainActivity::class.java)
+                    .putExtra("openSection","themes")
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP))
+            }
+            iconAction(KeyPopToolbarGlyph.Kind.MICROPHONE,"Open voice translation"){
+                voiceTargetPackage=currentInputEditorInfo?.packageName.orEmpty()
+                pendingSpeech=null;pendingSpeechSend=false
+                val code=when(language){1->"ur-PK";2->"sd-PK";else->"en-US"}
+                startActivity(Intent(this,KeyPopVoiceActivity::class.java)
+                    .putExtra("lang",code)
+                    .putExtra("target",prefs.getInt("autoTarget",1))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            }
+            root.addView(top,LinearLayout.LayoutParams(-1,d(43)))
+            suggestionToolbar=top
+        } else {
+        val toolbar=LinearLayout(this).apply {
+            orientation=LinearLayout.HORIZONTAL
+            gravity=Gravity.CENTER_VERTICAL
+            setPadding(d(2),0,d(2),0)
+        }
+        fun shortcut(kind:KeyPopToolbarGlyph.Kind,description:String,
+            weight:Float,fn:()->Unit) {
+            val control=toolbarIcon(kind,description,fn)
+            toolbar.addView(control,LinearLayout.LayoutParams(0,d(43),weight).apply {
+                leftMargin=d(2);rightMargin=d(2)
+            })
+        }
+        shortcut(KeyPopToolbarGlyph.Kind.GRID,if(toolsOpen)"Close tools" else "Open tools",1.12f) {
+            toolsOpen=!toolsOpen;if(toolsOpen)toolsPage=0;resizeOpen=false;draw()
+        }
+        shortcut(if(resizeOpen)KeyPopToolbarGlyph.Kind.CHECK else KeyPopToolbarGlyph.Kind.RESIZE,
+            if(resizeOpen)"Finish resizing" else "Resize keyboard",1f) {
+            resizeOpen=!resizeOpen;toolsOpen=false;draw()
+        }
+        shortcut(if(secure)KeyPopToolbarGlyph.Kind.PASTE else KeyPopToolbarGlyph.Kind.CLIPBOARD,
+            if(secure)"Paste" else "Open clipboard",.9f) {
+            if(secure)currentInputConnection?.performContextMenuAction(android.R.id.paste)
+            else {clipsOpen=!clipsOpen;emojiOpen=false;toolsOpen=false;resizeOpen=false;draw()}
+        }
+        shortcut(KeyPopToolbarGlyph.Kind.EMOJI,"Open emoji",.9f) {
+            if(!secure && !isNumeric){
+                emojiOpen=!emojiOpen;clipsOpen=false;toolsOpen=false
+                translatorOpen=false;writingOpen=false;resizeOpen=false;draw()
+            }
+        }
+        shortcut(KeyPopToolbarGlyph.Kind.SETTINGS,"Open settings",1.1f) {
+            startActivity(Intent(this,MainActivity::class.java)
+                .putExtra("openSection","settingsHome")
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP))
+        }
+        root.addView(toolbar,LinearLayout.LayoutParams(-1,d(44)))
+        suggestionToolbar=toolbar
+        }
+
+        if(toolsOpen) {
+            val panel=KeyPopSwipePanel(this) { direction ->
+                toolsPage=(toolsPage+direction+3)%3
+                draw()
+            }.apply {
+                orientation=LinearLayout.VERTICAL
+                setPadding(d(8),d(8),d(8),d(8))
+                background=KeyPopGlass.background(this@AetherImeService,s)
+            }
+            panel.addView(TextView(this).apply {
+                text=listOf("EVERYDAY TOOLS","EDIT & CONTROL","ADVANCED TOOLS")[toolsPage]
+                textSize=11f
+                setTextColor(s.ink)
+                setPadding(d(8),d(3),0,d(7))
+            })
+            fun grid(actions:List<Pair<String,()->Unit>>) {
+                actions.chunked(2).forEach { pair->
+                    val row=LinearLayout(this).apply {orientation=LinearLayout.HORIZONTAL}
+                    pair.forEach { (title,action)->
+                        val tile=chip(title,onTap=action).apply {
+                            contentDescription=title
+                            textSize=15f
+                        }
+                        row.addView(tile,LinearLayout.LayoutParams(0,d(55),1f).apply {
+                            leftMargin=d(4)
+                            rightMargin=d(4)
+                            topMargin=d(4)
+                            bottomMargin=d(4)
+                        })
+                    }
+                    if(pair.size==1)row.addView(View(this),
+                        LinearLayout.LayoutParams(0,d(55),1f))
+                    panel.addView(row)
+                }
+            }
+            when(toolsPage) {
+                0 -> grid(listOf(
+                    "☺  Emoji" to {
+                        toolsOpen=false
+                        if(!secure && !isNumeric) {
+                            emojiOpen=true;clipsOpen=false;writingOpen=false;translatorOpen=false
+                        }
+                        draw()
+                    },
+                    "▣  Autofill" to {
+                        toolsOpen=false
+                        startActivity(Intent(this,MainActivity::class.java)
+                            .putExtra("openSection","security")
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP))
+                        draw()
+                    },
+                    "▤  Clipboard" to {
+                        toolsOpen=false
+                        if(!secure) {
+                            clipsOpen=true;emojiOpen=false;writingOpen=false;translatorOpen=false
+                        }
+                        draw()
+                    },
+                    "⬚  Floating" to {
+                        prefs.edit().putBoolean("floating",!prefs.getBoolean("floating",false)).apply()
+                        toolsOpen=false;draw()
+                    },
+                    "📷  Screenshots" to {
+                        toolsOpen=false
+                        startActivity(Intent(this,KeyPopScreenshotAccessActivity::class.java)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                        draw()
+                    },
+                    "▤  Full archive" to {
+                        toolsOpen=false
+                        startActivity(Intent(this,KeyPopClipboardActivity::class.java)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                        draw()
+                    }
+                ))
+                1 -> grid(listOf(
+                    "↔  One-handed" to {
+                        prefs.edit().putInt("handMode",(prefs.getInt("handMode",0)+1)%3).apply()
+                        toolsOpen=false;draw()
+                    },
+                    "↕  Text editing" to {
+                        cursorTools=true;toolsOpen=false;draw()
+                    },
+                    "⤴  Share KeyPop" to {
+                        val share=Intent(Intent.ACTION_SEND).apply {
+                            type="text/plain"
+                            putExtra(Intent.EXTRA_TEXT,
+                                "KeyPop Keyboard: https://github.com/amjadrajamemon/KeyPop")
+                        }
+                        startActivity(Intent.createChooser(share,"Share KeyPop")
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    },
+                    "⬚  Resize" to {resizeOpen=true;toolsOpen=false;draw()},
+                    "↶  Undo" to {
+                        val input=currentInputConnection
+                        val time=SystemClock.uptimeMillis()
+                        val down=KeyEvent(time,time,KeyEvent.ACTION_DOWN,
+                            KeyEvent.KEYCODE_Z,0,KeyEvent.META_CTRL_ON)
+                        val accepted=input?.sendKeyEvent(down)?:false
+                        input?.sendKeyEvent(KeyEvent.changeAction(down,KeyEvent.ACTION_UP))
+                        if(!accepted)Toast.makeText(this,
+                            "Undo is not available in this text field",Toast.LENGTH_SHORT).show()
+                        toolsOpen=false;draw()
+                    },
+                    "🌐  Next language" to {toolsOpen=false;cycleLanguage()}
+                ))
+                else -> grid(listOf(
+                    "✦  Writing" to {
+                        toolsOpen=false
+                        if(!secure&&!isNumeric) {
+                            writingOpen=true;translatorOpen=false;emojiOpen=false;clipsOpen=false
+                            writingSource=currentInputConnection?.getSelectedText(0)?.toString()
+                                ?:currentInputConnection?.getTextBeforeCursor(800,0)?.toString().orEmpty()
+                            writingPreview="";writingMode="Formal"
+                        }
+                        draw()
+                    },
+                    "⇄  Translate" to {
+                        toolsOpen=false
+                        if(!secure&&!isNumeric) {
+                            translatorOpen=true;writingOpen=false;emojiOpen=false;clipsOpen=false
+                            translateDraftMode=false
+                            val existing=editorTranslationText()
+                            // Keep all typing in the host editor, not a hidden IME draft.
+                            translateDraftMode=false
+                            translateDraft=""
+                            translateSource=if(translateDraftMode)"" else existing
+                            translateSourceChoice=-1
+                            translateResult="";translationStatus=""
+                            googleEasyMode=KeyPopCloudTranslation.configured(this) &&
+                                prefs.getBoolean("googleCloudConsent",false)
+                            val detected=KeyPopTextLanguage.detect(translateSource,language)
+                            translateTarget=prefs.getInt("autoTarget",if(detected==2)0 else 2).coerceIn(0,2)
+                            if(translateTarget==detected)translateTarget=if(detected==2)0 else 2
+                        }
+                        draw()
+                        if(translatorOpen) scheduleLiveTranslation(80)
+                    },
+                    "🎙 Voice" to {
+                        voiceTargetPackage=currentInputEditorInfo?.packageName.orEmpty()
+                        pendingSpeech=null;pendingSpeechSend=false
+                        val code=when(language){1->"ur-PK";2->"sd-PK";else->"en-US"}
+                        startActivity(Intent(this,KeyPopVoiceActivity::class.java)
+                            .putExtra("lang",code)
+                            .putExtra("target",prefs.getInt("autoTarget",if(language==0)1 else 0))
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    },
+                    "◈  Theme" to {
+                        startActivity(Intent(this,MainActivity::class.java)
+                            .putExtra("openSection","themes")
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP))
+                    },
+                    "📷  Screenshot history" to {
+                        startActivity(Intent(this,KeyPopScreenshotHistoryActivity::class.java)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    },
+                    "⌨  Layout" to {
+                        startActivity(Intent(this,MainActivity::class.java)
+                            .putExtra("openSection","layouts")
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP))
+                    },
+                    "⇄  Symbols" to {
+                        symbols=!symbols;extended=false;toolsOpen=false;draw()
+                    },
+                    "✳  Extra keys" to {
+                        extended=!extended;toolsOpen=false;draw()
+                    },
+                    "★  Remember phrase" to {
+                        toolsOpen=false
+                        rememberAdaptivePhrase()
+                        draw()
+                    }
+                ))
+            }
+            panel.addView(View(this),LinearLayout.LayoutParams(-1,0,1f))
+            val pagination=LinearLayout(this).apply {
+                orientation=LinearLayout.HORIZONTAL
+                gravity=Gravity.CENTER
+            }
+            pagination.addView(chip("‹") {
+                toolsPage=(toolsPage+2)%3;draw()
+            }.apply {contentDescription="Previous tool page"},
+                LinearLayout.LayoutParams(d(56),d(37)))
+            pagination.addView(chip((0..2).joinToString("  "){
+                if(it==toolsPage)"●" else "○"
+            }) {toolsPage=(toolsPage+1)%3;draw()
+            }.apply {contentDescription="Tool page "+(toolsPage+1)+" of 3"},
+                LinearLayout.LayoutParams(d(112),d(37)))
+            pagination.addView(chip("›") {
+                toolsPage=(toolsPage+1)%3;draw()
+            }.apply {contentDescription="Next tool page"},
+                LinearLayout.LayoutParams(d(56),d(37)))
+            panel.addView(pagination)
+            root.addView(panel,LinearLayout.LayoutParams(-1,
+                d(if(toolsPage==0)304 else if(toolsPage==1)300 else 393)))
+            // Gboard-style tools replace the letter area rather than stack above it.
+            return
+        }
+        if(resizeOpen) {
+            // Do not stack an entire resize editor above all letter rows.
+            showResizePanel(root)
+            return
+        }
+        if(clipsOpen && !secure) { drawClips(root); return }
+        if(writingOpen && !secure && !isNumeric) showWritingPanel(root)
+        if(translatorOpen && !secure && !isNumeric &&
+            !prefs.getBoolean("compactTranslate",true)) showTranslator(root)
+        if(emojiOpen && !secure && !isNumeric) {
+            showEmojiPanel(root)
+            if(!emojiSearch)return
+        }
+        if(!emojiOpen) {
+            val bar=LinearLayout(this)
+            val anchorIndex=suggestionToolbar?.let{root.indexOfChild(it)} ?: -1
+            val insertion=if(anchorIndex<0)0 else
+                anchorIndex+if(KeyPopSuggestionStyle.position(this)==
+                    KeyPopSuggestionStyle.ABOVE_TOOLBAR)0 else 1
+            root.addView(bar,insertion,LinearLayout.LayoutParams(
+                -1,d(KeyPopSuggestionStyle.heightDp(this))))
+            repeat(3) { KeyPopSuggestionStyle.addChip(this,bar,chip(""){}) }
+            KeyPopSuggestionStyle.applyRow(this,bar)
+            suggestionBar=bar
+            KeyPopSuggestionPresentation.waiting(bar)
+            updateSuggestionVisibility(bar)
+            requestSuggestionRefresh(0)
+        }
+        if(cursorTools) {
+            val tools=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL }
+            fun editChip(label:String,action:()->Unit) {
+                tools.addView(chip(label) { action() }, LinearLayout.LayoutParams(0,d(36),1f).apply {
+                    leftMargin=d(2);rightMargin=d(2)
+                })
+            }
+            fun arrow(code:Int) {
+                currentInputConnection?.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN,code))
+                currentInputConnection?.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP,code))
+            }
+            editChip("←") { arrow(KeyEvent.KEYCODE_DPAD_LEFT) }
+            editChip("→") { arrow(KeyEvent.KEYCODE_DPAD_RIGHT) }
+            editChip("Select all") { currentInputConnection?.performContextMenuAction(android.R.id.selectAll) }
+            if(!secure) {
+                editChip("Copy") { currentInputConnection?.performContextMenuAction(android.R.id.copy) }
+                editChip("Paste") { currentInputConnection?.performContextMenuAction(android.R.id.paste) }
+            }
+            root.addView(tools)
+        }
+        val rows=if(isNumeric) listOf(listOf("1","2","3"),listOf("4","5","6"),
+            listOf("7","8","9"),listOf(".","0","⌫"))
+            else if(emojiSearch)KeyPopLayouts.active(this,0)
+            else if(symbols)
+                KeyPopKeysets.symbolRows(KeyPopKeysets.selectedId(this),extended)
+            else if(language!=0 && prefs.getBoolean("romanMode",false))
+                KeyPopLayouts.active(this,0)
+            else if(extended && language==1)urduExtended
+            else if(extended && language==2)sindhiExtended
+            else KeyPopLayouts.active(this,language)
+        val keyHeight=prefs.getInt("height",51).coerceIn(36,90)
+        // Dedicated 0–9 row exactly once, above the alphabetic rows.
+        if(KeyPopRowParity.hasNumberRow(prefs.getBoolean("numberRow",true),symbols,numeric(currentInputEditorInfo)))
+            addRow(root, KeyPopRowParity.digits,keyHeight-5)
+        rows.forEachIndexed { i, row ->
+            val keys=when {
+                i==rows.lastIndex && !symbols && !isNumeric -> listOf("⇧")+row+listOf("⌫")
+                i==rows.lastIndex && symbols -> row+listOf("⌫")
+                else -> row
+            }
+            val customRow=if(!isNumeric && !symbols && !extended && !emojiSearch)i else -1
+            val customLanguage=if(language!=0 && prefs.getBoolean("romanMode",false))0 else language
+            addRow(root,keys,keyHeight,layoutRow=customRow,layoutLanguage=customLanguage)
+        }
+        if(isNumeric) addRow(root,listOf("-","@","↵"),keyHeight, true)
+        else addRow(root,KeyPopKeysets.footer(KeyPopKeysets.selectedId(this),symbols),
+            keyHeight,true)
+    }
+    private fun addRow(parent:LinearLayout,labels:List<String>,height:Int,footer:Boolean=false,
+                       layoutRow:Int=-1,layoutLanguage:Int=language) {
+        val row=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL; gravity=Gravity.CENTER }
+        val preset=KeyboardPresetCatalog.selected(this)
+        val gap=prefs.getInt("spacing",4).coerceIn(1,10)
+        val hand=prefs.getInt("handMode",0)
+        val offset=if(preset.id==KeyboardPresetCatalog.FACETED && layoutRow>=0 && layoutRow%2==1)d(14) else 0
+        when(hand) {
+            1 -> row.setPadding(offset,0,d(72),0)
+            2 -> row.setPadding(d(72),0,offset,0)
+            else -> when {
+                preset.id==KeyboardPresetCatalog.MATERIAL && layoutRow==1 ->
+                    row.setPadding(d(14),0,d(14),0)
+                offset>0 -> row.setPadding(offset,0,0,0)
+                else -> Unit
+            }
+        }
+        val split=prefs.getBoolean("splitKeyboard",false) && resources.configuration.smallestScreenWidthDp>=600
+        labels.forEachIndexed { index,label ->
+            if(split && index==labels.size/2) row.addView(View(this),
+                LinearLayout.LayoutParams(d(28),d(height)))
+            val show=when {
+                label=="SPACE" -> if(language==0) "English" else languages[language]
+                label=="☺," -> "☺"
+                label=="↵" && mayTranslateOnSend() &&
+                    !KeyPopEnterPolicy.insertsNewline(currentInputEditorInfo) &&
+                    !sensitive(currentInputEditorInfo) -> "⇄ Send"
+                shift && (language==0 || prefs.getBoolean("romanMode",false)) &&
+                    label.length==1 && label[0].isLetter() -> label.uppercase(Locale.ROOT)
+                else -> label
+            }
+            val weight=KeyboardPresetCatalog.keyWeight(preset.id,label)
+            val heavy=label in listOf("↵","⇧") || (label=="SPACE" && palette().shape==3)
+            val altLanguage=if(language!=0 && prefs.getBoolean("romanMode",false))0 else language
+            val material=KeyPopKeysets.selectedId(this)==KeyPopKeysets.GBOARD && !symbols
+            val variants=KeyPopRowParity.alternates(
+                KeyPopKeysets.alternates(KeyPopKeysets.selectedId(this),label,altLanguage),
+                label,KeyPopRowParity.hasNumberRow(
+                    prefs.getBoolean("numberRow",true),symbols,numeric(currentInputEditorInfo)))
+            val actualHint=if(prefs.getBoolean("hints",true))variants.firstOrNull() else null
+            // The digit row is a single large digit per key: alternate numbers
+            // remain accessible on hold, never as a second visible caption.
+            val letterHint=label.length==1 && label[0].isLetter() &&
+                actualHint!=null && actualHint!=label
+            val caption=if(!material && !symbols && letterHint)
+                show+"\n"+actualHint else show
+            val button=makeKey(caption,heavy,weight) { press(label) }
+            button.tag=label
+            // Control keys use visibly larger glyphs as well as wider bounds.
+            button.textSize=KeyboardPresetCatalog.keyTextSize(
+                label,caption,prefs.getInt("font",19).coerceIn(12,32).toFloat())
+            if(material && label.length==1 && label[0].isLetter() &&
+                actualHint!=null && actualHint!=label && button is KeyPopHintKey) {
+                button.hintText=actualHint
+                button.hintColor=palette().ink
+            }
+            if(label=="☺,")button.setOnLongClickListener{
+                currentInputConnection?.commitText(",",1)
+                refreshSuggestions()
+                true
+            }
+            if(label=="⌫")installRepeatingBackspace(button)
+            val glidable=!symbols && language==0 && label.length==1 &&
+                label[0].isLetter() && prefs.getBoolean("glide",false)
+            if(variants.isNotEmpty() || glidable)
+                installCharacterGesture(button,label,variants,glidable)
+            button.contentDescription=when(label) {
+                "⌫" -> "Backspace. Hold to delete faster, release to stop"
+                "⇧" -> "Shift. Double tap to lock uppercase"
+                "SPACE" -> "Spacebar. Hold to switch languages or slide to move cursor"
+                "↵" -> "Enter or app action"
+                "🌐" -> "Switch typing language"
+                "?123" -> "Switch to symbols and numbers"
+                "ABC" -> "Switch to letters"
+                else -> if(label.length==1) "Type "+label else label
+            }
+            // Virtual keys must not steal the host editor's focus. A
+            // focus-taking Enter key can dismiss an IME in chat editors.
+            // Accessibility focus is independent of keyboard input focus.
+            button.isFocusableInTouchMode=false
+            button.isFocusable=false
+            if(label=="SPACE" && prefs.getBoolean("spaceCursor",true))
+                installSpaceGestures(button)
+            keyViews.add(button to label)
+            val indexInLayout=if(layoutRow==2 && label !in setOf("⇧","⌫"))index-1
+                else if(label in setOf("⇧","⌫"))-1 else index
+            val widthFactor=KeyPopKeyGeometry.widthPercent(this,layoutLanguage,
+                layoutRow,indexInLayout,label)/100f
+            val bonus=KeyboardPresetCatalog.controlHeightBonus(label)+
+                (if(label=="SPACE")12 else 0)
+            val actualHeight=((height+bonus)*
+                KeyPopKeyGeometry.heightPercent(this,layoutLanguage,layoutRow,
+                    indexInLayout,label)/100f).toInt().coerceAtLeast(30)
+            row.addView(button,LinearLayout.LayoutParams(0,d(actualHeight),weight*widthFactor).apply {
+                leftMargin=d(gap/2); rightMargin=d(gap/2)
+                // Fixed row heights used to hide the enlarged controls:
+                // painted 8dp taller caps now participate in row measurement.
+                topMargin=if(bonus>0)0 else d(2)
+                bottomMargin=if(bonus>0)0 else d(2)
+            })
+        }
+        parent.addView(row)
+    }
+    /** Slide on Space to move the caret; long press for an explicit language menu. */
+    /** Gboard-like deletion: tap removes one character, hold repeats and accelerates.
+     * Releasing/cancelling stops immediately, including in translation mode. */
+    private fun stopBackspaceRepeating() {
+        repeatBackspace?.let{repeatHandler.removeCallbacks(it)}
+        repeatBackspace=null
+        didRepeatBackspace=false
+    }
+    private fun installRepeatingBackspace(button:Button) {
+        button.setOnTouchListener { _,event->
+            when(event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    stopBackspaceRepeating()
+                    button.isPressed=true
+                    // Delete on DOWN, not only on UP. Android selection popups
+                    // and keyboard view changes may cancel the UP event.
+                    press("⌫")
+                    val ticker=object:Runnable {
+                        var repeats=0
+                        override fun run() {
+                            if(!button.isAttachedToWindow)return
+                            didRepeatBackspace=true
+                            if(translatorOpen && translateDraftMode) {
+                                translateDraft=translateDraft.dropLast(1)
+                                translateSource=translateDraft
+                                liveSourceView?.text=translateDraft
+                            } else {
+                                deleteBackwardFromEditor(allowCorrectionUndo=false)
+                            }
+                            repeats++
+                            // Avoid inflating suggestion views for every deleted character.
+                            if(repeats%5==0)refreshSuggestions()
+                            repeatHandler.postDelayed(this,when {
+                                repeats>34 -> 25L
+                                repeats>14 -> 40L
+                                else -> 75L
+                            })
+                        }
+                    }
+                    repeatBackspace=ticker
+                    repeatHandler.postDelayed(ticker,330L)
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    button.isPressed=false
+                    val repeated=didRepeatBackspace
+                    stopBackspaceRepeating()
+                    if(repeated) {refreshSuggestions();scheduleLiveTranslation(270)}
+                    true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    button.isPressed=false
+                    stopBackspaceRepeating()
+                    true
+                }
+                else->true
+            }
+        }
+    }
+
+    private fun installSpaceGestures(button:Button) {
+        var firstX=0f
+        var lastX=0f
+        var downTime=0L
+        var moved=false
+        fun languageMenu() {
+            val menu=android.widget.PopupMenu(this,button)
+            languages.forEachIndexed{index,label->
+                menu.menu.add(label).setOnMenuItemClickListener {
+                    language=index
+                    prefs.edit().putInt("language",index).apply()
+                    shift=false;capsLock=false;symbols=false;extended=false;draw()
+                    true
+                }
+            }
+            menu.show()
+        }
+        button.setOnTouchListener { _,event ->
+            when(event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    firstX=event.rawX;lastX=event.rawX
+                    downTime=SystemClock.uptimeMillis()
+                    moved=false;true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if(kotlin.math.abs(event.rawX-firstX)>d(14))moved=true
+                    if(moved) {
+                        val difference=event.rawX-lastX
+                        if(kotlin.math.abs(difference)>=d(15)) {
+                            val code=if(difference>0)KeyEvent.KEYCODE_DPAD_RIGHT
+                                else KeyEvent.KEYCODE_DPAD_LEFT
+                            val times=(kotlin.math.abs(difference)/d(15)).toInt().coerceIn(1,8)
+                            repeat(times) {
+                                currentInputConnection?.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN,code))
+                                currentInputConnection?.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP,code))
+                            }
+                            lastX=event.rawX
+                        }
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    if(!moved && SystemClock.uptimeMillis()-downTime>=500) languageMenu()
+                    else if(!moved)press("SPACE")
+                    true
+                }
+                MotionEvent.ACTION_CANCEL ->true
+                else->false
+            }
+        }
+    }
+
+    /** Shows alternates while held and permits sliding without releasing the key. */
+    private fun installCharacterGesture(button:Button,label:String,variants:List<String>,
+                                        glideEnabled:Boolean) {
+        var downX=0f;var downY=0f
+        var canceled=false;var popup=false;var gliding=false
+        val trail=ArrayList<String>()
+        val open=Runnable {
+            if(!canceled && !gliding && variants.isNotEmpty() && button.isAttachedToWindow) {
+                characterStrip?.show(button,variants,palette().accent,palette().ink,palette().surface)
+                popup=characterStrip?.isShowing==true
+                if(popup)tapFeedback(button)
+            }
+        }
+        button.setOnTouchListener { _,event->
+            when(event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    canceled=false;popup=false;gliding=false
+                    downX=event.rawX;downY=event.rawY
+                    trail.clear();trail.add(label)
+                    button.isPressed=true
+                    button.postDelayed(open,390L)
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if(popup) characterStrip?.slide(event.rawX)
+                    else {
+                        val delta=kotlin.math.abs(event.rawX-downX)+
+                            kotlin.math.abs(event.rawY-downY)
+                        if(delta>d(17)) {
+                            button.removeCallbacks(open)
+                            if(glideEnabled)gliding=true
+                        }
+                        if(gliding) {
+                            val rect=Rect()
+                            for((key,letter) in keyViews) {
+                                if(letter.length==1 && letter[0].isLetter()
+                                    && key.getGlobalVisibleRect(rect)
+                                    && rect.contains(event.rawX.toInt(),event.rawY.toInt())) {
+                                    if(trail.lastOrNull()!=letter)trail.add(letter)
+                                    break
+                                }
+                            }
+                        }
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    canceled=true;button.isPressed=false
+                    button.removeCallbacks(open)
+                    val selected=if(popup)characterStrip?.chosen() else null
+                    characterStrip?.dismiss()
+                    if(selected!=null) {
+                        currentInputConnection?.commitText(selected,1)
+                        refreshSuggestions()
+                    } else if(gliding && trail.size>=3) {
+                        val suggested=lexicon.glide(0,trail)
+                        if(suggested!=null) {
+                            currentInputConnection?.commitText(suggested+" ",1)
+                            learnAsync(0,suggested);refreshSuggestions()
+                        } else press(label)
+                    } else press(label)
+                    popup=false
+                    true
+                }
+                MotionEvent.ACTION_CANCEL ->{
+                    canceled=true;button.isPressed=false
+                    button.removeCallbacks(open);characterStrip?.dismiss()
+                    popup=false;true
+                }
+                else ->false
+            }
+        }
+    }
+    private fun mayTranslateOnSend():Boolean =
+        KeyPopTranslationSendPolicy.mayTranslateOnSend(
+            translatorOpen,
+            prefs.getBoolean("translateOnSendExplicit",false),
+            prefs.getBoolean("autoTargetConfigured",false))
+
+    private fun translateBeforeSend() {
+        if(!mayTranslateOnSend())return
+        val input=currentInputConnection ?:return
+        val sendingDraft=translatorOpen && translateDraftMode
+        val selected=input.getSelectedText(0)?.toString()?.takeIf{it.isNotBlank()}
+        val source=if(sendingDraft)translateDraft else editorTranslationText()
+        val editorPackage=currentInputEditorInfo?.packageName.orEmpty()
+        val startedConnection=input
+        if(source.isBlank())return
+        // The visibly selected Easy Translate pair takes precedence over the
+        // Settings default. Formerly Send used autoTarget (Urdu) even while
+        // the live panel explicitly displayed English → Sindhi.
+        val detected=KeyPopTextLanguage.detect(source,language)
+        val directionSelection=KeyPopTranslationSendPolicy.select(
+            translatorOpen,translateSourceChoice,translateTarget,detected,
+            prefs.getInt("autoTarget",0))
+        val from=directionSelection.source
+        val to=directionSelection.target
+        if(from==to) {
+            Toast.makeText(this,"Select different source and target languages",
+                Toast.LENGTH_LONG).show()
+            return
+        }
+        val direction=codes[from]+"-"+codes[to]
+        val requestedGoogle=translatorOpen && googleEasyMode
+        val callback:(Result<String>)->Unit={result->
+            result.onSuccess { translated ->
+                val current=currentInputConnection
+                if(current!=null && current===startedConnection &&
+                    currentInputEditorInfo?.packageName==editorPackage &&
+                    !sensitive(currentInputEditorInfo)) {
+                    val stillCurrent=if(sendingDraft)translateDraft
+                        else if(selected!=null)current.getSelectedText(0)?.toString().orEmpty()
+                        else current.getTextBeforeCursor(source.length,0)?.toString().orEmpty()
+                    if(stillCurrent!=source ||
+                        (sendingDraft && (!translatorOpen || !translateDraftMode)) ||
+                        (translatorOpen &&
+                        (translateTarget!=to ||
+                         (translateSourceChoice in 0..2 && translateSourceChoice!=from) ||
+                         googleEasyMode!=requestedGoogle))) {
+                        Toast.makeText(this,"Text or translation direction changed; nothing sent",
+                            Toast.LENGTH_SHORT).show()
+                    } else {
+                        current.beginBatchEdit()
+                        val removed=if(sendingDraft || selected!=null)true
+                            else current.deleteSurroundingText(source.length,0)
+                        val accepted=removed && current.commitText(translated,1)
+                        current.endBatchEdit()
+                        if(!accepted) {
+                            if(!sendingDraft && selected==null && removed)
+                                current.commitText(source,1)
+                            Toast.makeText(this,"Editor refused translation; nothing sent",
+                                Toast.LENGTH_SHORT).show()
+                            return@onSuccess
+                        }
+                        if(sendingDraft)translateDraft=""
+                        // This is an explicit Send request: invoke the host's real
+                        // SEND action, not SEARCH/GO or a silent keyboard-only draft.
+                        val action=(currentInputEditorInfo?.imeOptions ?:0) and
+                            EditorInfo.IME_MASK_ACTION
+                        val sent=if(KeyPopTranslationSendPolicy.supportsSendAction(action))
+                            current.performEditorAction(EditorInfo.IME_ACTION_SEND)
+                        else if(KeyPopTranslationSendPolicy.allowEnterSendFallback(action,
+                                prefs.getBoolean("sendViaEnterFallback",false))) {
+                            val now=SystemClock.uptimeMillis()
+                            val down=KeyEvent(now,now,KeyEvent.ACTION_DOWN,KeyEvent.KEYCODE_ENTER,0)
+                            val downAccepted=current.sendKeyEvent(down)
+                            current.sendKeyEvent(KeyEvent.changeAction(down,KeyEvent.ACTION_UP))
+                            downAccepted
+                        } else false
+                        if(!sent)Toast.makeText(this,
+                            "Translation inserted. This app needs its own Send button "+
+                                "(or enable Enter-to-send fallback in settings).",
+                            Toast.LENGTH_LONG).show()
+                        else {
+                            translatorOpen=false;stopLiveTranslation();draw()
+                        }
+                    }
+                }
+            }.onFailure {
+                Toast.makeText(this,
+                    (it.localizedMessage?:"Translation unavailable")+
+                    " · original text not sent",
+                    Toast.LENGTH_LONG).show()
+            }
+        }
+        if(KeyPopTranslationSendPolicy.canReusePreview(
+            translatorOpen,translateResult,source,previewSource,
+            direction,previewDirection,requestedGoogle,previewGoogle)) {
+            callback(Result.success(translateResult))
+            return
+        }
+        Toast.makeText(this,"Translating "+codes[from]+" → "+codes[to]+"…",
+            Toast.LENGTH_SHORT).show()
+        if(requestedGoogle) {
+            if(!KeyPopCloudTranslation.configured(this) ||
+                !prefs.getBoolean("googleCloudConsent",false)) {
+                callback(Result.failure(IllegalStateException(
+                    "Configure Google Cloud API key and consent in KeyPop Settings")))
+            } else KeyPopCloudTranslation.translate(
+                this,codes[from],codes[to],source,callback)
+        } else {
+            KeyPopTranslator.translate(this,codes[from],codes[to],source,
+                if(translatorOpen)false else prefs.getBoolean("remoteTranslate",false),
+                if(translatorOpen)"" else prefs.getString("translateEndpoint","").orEmpty(),
+                callback)
+        }
+    }
+    private fun showEmojiPanel(root:LinearLayout) {
+        val skin=palette()
+        val top=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
+        top.addView(chip(if(emojiSearch)"🔎 "+emojiQuery+"_" else "🔎 Search emoji") {
+            emojiSearch=!emojiSearch
+            if(!emojiSearch)emojiQuery=""
+            draw()
+        },LinearLayout.LayoutParams(0,d(37),2f))
+        top.addView(chip("× Close") {
+            emojiOpen=false;emojiSearch=false;emojiQuery="";draw()
+        },LinearLayout.LayoutParams(0,d(37),1f))
+        root.addView(top)
+        val tabs=HorizontalScrollView(this).apply{isHorizontalScrollBarEnabled=false}
+        val strip=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
+        KeyPopEmoji.categories.forEach { cat ->
+            strip.addView(chip(if(cat==emojiCategory)"● "+cat else cat) {
+                emojiCategory=cat;draw()
+            },LinearLayout.LayoutParams(d(if(cat.length>8)99 else 80),d(34)).apply{rightMargin=d(3)})
+        }
+        tabs.addView(strip);root.addView(tabs)
+        val matches=if(emojiSearch && emojiQuery.isNotBlank())KeyPopEmoji.search(emojiQuery)
+            else KeyPopEmoji.inCategory(this,emojiCategory,"")
+        val list=matches.take(if(emojiSearch)16 else 64)
+        val grid=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL}
+        if(list.isEmpty())grid.addView(TextView(this).apply{
+            text="No matching emoji. Try another word."
+            setTextColor(skin.ink);setPadding(d(9),d(13),d(9),d(13))
+        })
+        list.chunked(8).forEach { chunk->
+            val line=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
+            chunk.forEach { entry->
+                val button=chip(entry.symbol) {
+                    if(!sensitive(currentInputEditorInfo)) {
+                        currentInputConnection?.commitText(entry.symbol,1)
+                        KeyPopEmoji.record(this,entry.symbol)
+                    }
+                }.apply {
+                    textSize=21f;contentDescription=entry.keywords
+                    setOnLongClickListener {
+                        KeyPopEmoji.toggleFavorite(this@AetherImeService,entry.symbol)
+                        Toast.makeText(this@AetherImeService,"Favorite updated",Toast.LENGTH_SHORT).show()
+                        draw();true
+                    }
+                }
+                line.addView(button,LinearLayout.LayoutParams(0,d(43),1f).apply{
+                    leftMargin=d(1);rightMargin=d(1);bottomMargin=d(2)
+                })
+            }
+            repeat(8-chunk.size){line.addView(View(this),LinearLayout.LayoutParams(0,d(43),1f))}
+            grid.addView(line)
+        }
+        root.addView(ScrollView(this).apply{addView(grid)},
+            LinearLayout.LayoutParams(-1,d(if(emojiSearch)93 else 176)))
+        if(emojiSearch)root.addView(TextView(this).apply{
+            text="Type emoji name below. Enter exits search."
+            textSize=10f;setTextColor(skin.ink);setPadding(d(5),d(3),d(5),d(3))
+        })
+    }
+
+    /**
+     * Never run spelling-distance calculations or dictionary SharedPreferences
+     * reads on the keyboard's input thread. All work is serialized off the
+     * main thread, debounced 28 ms, and stale results are discarded.
+     * Three chip views are reused instead of recreated on every keystroke.
+     */
+    /** Fetch from the editor when our transient mirror has no current snapshot. */
+    private fun readContext(input:InputConnection,limit:Int):String =
+        if(sensitive(currentInputEditorInfo))"" else readMirroredContext(input,limit).orEmpty()
+
+    private fun readMirroredContext(input:InputConnection,limit:Int):String? {
+        editorContext.text()?.let {
+            contextCacheHits++
+            return it.takeLast(limit)
+        }
+        contextCacheMisses++
+        val start=SystemClock.elapsedRealtimeNanos()
+        val fresh=input.getTextBeforeCursor(256,0)?.toString()
+        KeyPopDiagnostics.observeEditorRead(this,SystemClock.elapsedRealtimeNanos()-start)
+        if(fresh!=null)editorContext.seed(fresh,lastKnownSelection)
+        return fresh?.takeLast(limit)
+    }
+
+    private fun cancelSuggestionWork() {
+        predictionGeneration++
+        predictionPending?.let{predictionHandler.removeCallbacks(it)}
+        predictionPending=null
+        suggestionRefreshTask?.let{predictionHandler.removeCallbacks(it)}
+        suggestionRefreshTask=null
+        lastSuggestionContext=null
+        latestSpaceAdvice=null
+        suggestionReadRetries=0
+    }
+
+    private fun suggestionsEnabled(info:EditorInfo?):Boolean =
+        inputViewActive && info!=null && prefs.getBoolean("suggestions",true) &&
+            KeyPopTypingRules.textAllowsSuggestions(info.inputType,info.imeOptions)
+
+    private fun updateSuggestionVisibility(bar:LinearLayout):Boolean {
+        val show=suggestionsEnabled(currentInputEditorInfo)
+        bar.visibility=if(show)View.VISIBLE else View.GONE
+        suggestionToolbar?.visibility=if(KeyPopPredictionContext.toolbarVisible(
+            prefs.getBoolean("alwaysShowToolbar",true),show))View.VISIBLE else View.GONE
+        return show
+    }
+
+    private fun requestSuggestionRefresh(delayMs:Long=12L) {
+        suggestionRefreshTask?.let{predictionHandler.removeCallbacks(it)}
+        val task=Runnable {
+            suggestionRefreshTask=null
+            refreshSuggestions()
+        }
+        suggestionRefreshTask=task
+        predictionHandler.postDelayed(task,delayMs)
+    }
+
+    /** Only explicit, locally consented phrase snapshots are remembered. */
+    private fun rememberAdaptivePhrase() {
+        if(!prefs.getBoolean("adaptive_finished_phrases",false)) {
+            Toast.makeText(this,"Enable finished-phrase memory in Typing settings first",
+                Toast.LENGTH_SHORT).show()
+            return
+        }
+        val info=currentInputEditorInfo
+        if(info==null || sensitive(info) ||
+            !KeyPopTypingRules.textAllowsLearning(info.inputType)) {
+            Toast.makeText(this,"Phrase memory is unavailable in this field",
+                Toast.LENGTH_SHORT).show()
+            return
+        }
+        val conn=currentInputConnection ?:return
+        val phrase=runCatching { conn.getTextBeforeCursor(220,0)?.toString().orEmpty() }
+            .getOrDefault("").takeLast(220).trim()
+        if(phrase.length<12 || KeyPopUrlEditingPolicy.touchesUrlOrEmail(phrase) ||
+            hasSelectedRange) {
+            Toast.makeText(this,"Enter a complete non-URL phrase first",Toast.LENGTH_SHORT).show()
+            return
+        }
+        adaptiveController.learnConfirmedPhrase(phrase,info,false)
+        Toast.makeText(this,"Phrase saved if eligible",Toast.LENGTH_SHORT).show()
+    }
+
+    private fun probeSuggestions(bar:LinearLayout,word:String) {
+        KeyPopVisualProbe.capture(this,currentInputEditorInfo,bar,suggestionToolbar,word)
+    }
+
+    private fun refreshSuggestions() {
+        val bar=suggestionBar ?:return
+        val info=currentInputEditorInfo
+        if(!updateSuggestionVisibility(bar) || info==null) {
+            cancelSuggestionWork()
+            KeyPopSuggestionPresentation.waiting(bar)
+            bar.visibility=View.GONE
+            probeSuggestions(bar,"")
+            return
+        }
+        val input=currentInputConnection
+        val draft=translatorOpen && translateDraftMode
+        val privateMode=sensitive(info) || !KeyPopTypingRules.textAllowsLearning(info.inputType)
+        // Private and search fields can use the current text for generic offline
+        // predictions. Keep these reads out of the editor mirror and learned models.
+        val before=when {
+            draft -> translateDraft.takeLast(140)
+            input==null -> null
+            privateMode -> input.getTextBeforeCursor(140,0)?.toString()
+            else -> readMirroredContext(input,140)
+        }
+        if(before==null) {
+            val attempts=suggestionReadRetries
+            cancelSuggestionWork()
+            suggestionReadRetries=attempts+1
+            KeyPopSuggestionPresentation.waiting(bar)
+            probeSuggestions(bar,"")
+            // A connection may briefly be unavailable when Android attaches or
+            // restarts the editor, even though the keyboard is already shown.
+            if(attempts<3)requestSuggestionRefresh(60L*(attempts+1))
+            return
+        }
+        suggestionReadRetries=0
+        // Treat URL-like tokens as read-only for prediction and all suggestion
+        // replacements. Browsers may report URI edit controls as plain text.
+        val afterContext=if(!draft)runCatching {
+            input?.getTextAfterCursor(48,0)?.toString().orEmpty()
+        }.getOrDefault("") else ""
+        if(!draft && KeyPopUrlEditingPolicy.touchesUrlOrEmail(before,afterContext)) {
+            cancelSuggestionWork()
+            KeyPopSuggestionPresentation.waiting(bar,before.isNotBlank())
+            probeSuggestions(bar,"")
+            return
+        }
+        val address=KeyPopTypingRules.isAddressEditor(info.inputType)
+        val word=trailingWordPattern.find(before)?.value.orEmpty()
+        val nextWords=prefs.getBoolean("predictNext",true)
+        val predLang=when {
+            translatorOpen && translateSourceChoice in 0..2 -> translateSourceChoice
+            translatorOpen && word.isNotBlank() -> KeyPopTextLanguage.detect(word,language)
+            language!=0 && prefs.getBoolean("romanMode",false) -> 0
+            word.isNotBlank() -> KeyPopTextLanguage.detect(word,language)
+            else -> language
+        }
+        val key="$language|$translatorOpen|$predLang|${info.inputType}|${info.imeOptions}|$before|$nextWords"
+        if(lastSuggestionContext==key)return
+        cancelSuggestionWork()
+        lastSuggestionContext=key
+        if((address && KeyPopTypingRules.isAddressToken(before)) ||
+            (word.isEmpty() && !nextWords)) {
+            KeyPopSuggestionPresentation.waiting(bar,before.isNotBlank())
+            probeSuggestions(bar,"")
+            return
+        }
+        if(word.isNotEmpty())KeyPopSuggestionPresentation.composing(bar,word)
+        else KeyPopSuggestionPresentation.waiting(bar,before.isNotBlank())
+        probeSuggestions(bar,word)
+
+        val previous=trailingWordPattern.find(before.removeSuffix(word).trimEnd())?.value.orEmpty()
+        val useContext=prefs.getBoolean("contextPredictions",true)
+        val limit=if(prefs.getBoolean("aggressivePredictions",true))8 else 3
+        val showGrammar=prefs.getBoolean("grammarHints",true)
+        val token=predictionGeneration
+        val task=Runnable {
+            predictionPending=null
+            if(predictionExecutor.isShutdown)return@Runnable
+            predictionExecutor.execute {
+                if(token!=predictionGeneration)return@execute
+                val start=SystemClock.elapsedRealtimeNanos()
+                val personal=if(!privateMode && useContext)
+                    runCatching{personalLanguage.candidates(predLang,before,word,3)}
+                        .getOrDefault(emptyList()) else emptyList()
+                val dictionary=if(word.isEmpty())lexicon.nextWords(predLang,previous,before)
+                    else lexicon.suggestions(predLang,word,limit,previous,
+                        beforeCursor=if(useContext)before else "",allowPersonal=!privateMode)
+                val spelling=if(word.length>=3)
+                    lexicon.correction(predLang,word,before,allowPersonal=!privateMode) else null
+                val feedback=if(word.length>=3 && !privateMode)
+                    runCatching{personalLanguage.rejectionWeights(
+                        predLang,word,(personal+dictionary+listOfNotNull(spelling)).distinct())}
+                        .getOrDefault(emptyMap()) else emptyMap()
+                val safeSpelling=spelling?.takeUnless{(feedback[it]?:0)>=2}
+                val values=KeyPopUnifiedPrediction.rank(predLang,word,before,
+                    personal,dictionary,safeSpelling,feedback,8)
+                val grammar=if(word.isNotEmpty() && !privateMode && showGrammar)
+                    KeyPopGrammarRules.suggest(before,predLang) else null
+                KeyPopDiagnostics.observePredictionCompute(this,
+                    SystemClock.elapsedRealtimeNanos()-start)
+                if(token!=predictionGeneration)return@execute
+                predictionHandler.post {
+                    if(token!=predictionGeneration || bar!==suggestionBar ||
+                        !suggestionsEnabled(currentInputEditorInfo))return@post
+                    if(!privateMode)
+                        latestSpaceAdvice=SpaceAdvice(predLang,before,word,safeSpelling,grammar)
+                    renderSuggestions(bar,before,word,predLang,values,safeSpelling,grammar,token)
+                    // RC40 stays responsive while RC42's deterministic model
+                    // runs on a separate executor; stale editor results are
+                    // discarded and cannot be inserted in a different field.
+                    if(predLang==0 && !privateMode && !draft && !hasSelectedRange) {
+                        val currentEpoch=adaptiveEditorEpoch
+                        adaptiveController.predict(before,afterContext,info,false) { adaptive ->
+                            if(currentEpoch!=adaptiveEditorEpoch ||
+                                token!=predictionGeneration ||
+                                bar!==suggestionBar || !suggestionsEnabled(currentInputEditorInfo) ||
+                                hasSelectedRange || currentInputEditorInfo?.packageName!=info.packageName)
+                                return@predict
+                            val live=currentInputConnection ?:return@predict
+                            val liveBefore=runCatching {
+                                live.getTextBeforeCursor(140,0)?.toString()
+                            }.getOrNull()
+                            val liveAfter=runCatching {
+                                live.getTextAfterCursor(48,0)?.toString().orEmpty()
+                            }.getOrDefault("")
+                            if(liveBefore==before && liveAfter==afterContext && adaptive.isNotEmpty())
+                                renderSuggestions(bar,before,word,predLang,values,
+                                    safeSpelling,grammar,token,adaptive)
+                        }
+                    }
+                }
+            }
+        }
+        predictionPending=task
+        predictionHandler.postDelayed(task,16L)
+    }
+    private fun renderSuggestions(bar:LinearLayout,before:String,word:String,
+        predLang:Int,values:List<String>,spelling:String?,grammar:KeyPopGrammarFix?,token:Int,
+        adaptiveOffers:List<KeyPopAdaptiveLanguageModel.Candidate> = emptyList()) {
+        fun stillCurrent():Boolean = token==predictionGeneration && bar===suggestionBar &&
+            suggestionsEnabled(currentInputEditorInfo)
+
+        fun replaceWord(choice:String) {
+            if(!stillCurrent())return
+            lastAppliedCorrection=null
+            if(translatorOpen && translateDraftMode) {
+                val actual=trailingWordPattern.find(translateDraft)?.value.orEmpty()
+                if(actual!=word)return
+                val replacement=KeyPopPredictionContext.wordCase(choice,actual,before)
+                val committed=if(prefs.getBoolean("suggestionSpace",true))
+                    KeyPopPredictionContext.committedWord(replacement,"")
+                    else replacement
+                translateDraft=translateDraft.dropLast(actual.length)+committed
+                translateSource=translateDraft
+                liveSourceView?.text=translateDraft
+                learnAsync(predLang,replacement)
+                learnPersonalAsync(predLang,before.dropLast(word.length),replacement)
+                refreshSuggestions()
+                scheduleLiveTranslation(120)
+                return
+            }
+            val connection=currentInputConnection ?:return
+            if(hasSelectedRange || runCatching {
+                    connection.getSelectedText(0)?.isNotEmpty()==true
+                }.getOrDefault(false))return
+            val editorBefore=connection.getTextBeforeCursor(140,0)?.toString() ?:return
+            if(editorBefore!=before)return
+            val actual=trailingWordPattern.find(editorBefore)?.value.orEmpty()
+            if(actual!=word)return
+            val inputType=currentInputEditorInfo?.inputType?:0
+            val address=KeyPopTypingRules.isAddressEditor(inputType)
+            // An address editor may also be a combined web search box. Protect
+            // URL tokens, but do not disable spacing for ordinary search words.
+            val after=connection.getTextAfterCursor(48,0)?.toString()
+            // Keep RC40 spelling corrections unrestricted: a valid typo fix
+            // need not begin with the misspelled word. URL and selection
+            // checks still apply to every native and adaptive candidate.
+            if(KeyPopUrlEditingPolicy.touchesUrlOrEmail(editorBefore,after.orEmpty()))return
+            if(address && !KeyPopPredictionContext.searchWordsAllowSpacing(
+                    editorBefore,after))return
+            val replacement=if(address)KeyPopTypingRules.preservesCase(actual,choice)
+                else KeyPopPredictionContext.wordCase(choice,actual,before)
+            val autoSpace=prefs.getBoolean("suggestionSpace",true)
+            val committed=if(autoSpace)
+                KeyPopPredictionContext.committedWord(replacement,after.orEmpty())
+                else replacement
+            editorContext.clear()
+            connection.beginBatchEdit()
+            val accepted=try {
+                (actual.isEmpty() || connection.deleteSurroundingText(actual.length,0)) &&
+                    connection.commitText(committed,1)
+            } finally {
+                connection.endBatchEdit()
+            }
+            if(!accepted)return
+            pendingSuggestionBoundary=if(autoSpace && committed.endsWith(" "))
+                PendingSuggestionBoundary(replacement,
+                    currentInputEditorInfo?.packageName.orEmpty(),
+                    SystemClock.elapsedRealtime()) else null
+            learnAsync(predLang,replacement)
+            learnPersonalAsync(predLang,before.dropLast(word.length),replacement)
+            if(predLang==0 && replacement.all { it.isLetter() || it=='-' || it=='’' })
+                adaptiveController.learnAcceptedWord(replacement,currentInputEditorInfo,false)
+            if(!replacement.equals(actual,ignoreCase=true))
+                correctionFeedbackAsync(predLang,actual,replacement,true)
+            refreshSuggestions()
+        }
+        val offers=mutableListOf<Pair<String,()->Unit>>()
+        if(word.isBlank()) {
+            values.distinct().take(3).forEach {candidate ->
+                offers.add(KeyPopPredictionContext.wordCase(candidate,word,before) to {
+                    replaceWord(candidate)
+                })
+            }
+        } else {
+            val alternatives=(listOfNotNull(spelling)+values)
+                .filterNot{it.equals(word,ignoreCase=true)}
+                .distinct().take(2)
+            if(grammar!=null) {
+                offers.add(("✓ "+grammar.label) to {
+                    val conn=currentInputConnection
+                    val actual=conn?.getTextBeforeCursor(grammar.remove,0)?.toString().orEmpty()
+                    if(stillCurrent() && actual.length==grammar.remove && before.endsWith(actual)) {
+                        editorContext.clear()
+                        conn?.beginBatchEdit()
+                        conn?.deleteSurroundingText(grammar.remove,0)
+                        conn?.commitText(grammar.replacement,1)
+                        conn?.endBatchEdit()
+                        refreshSuggestions()
+                    }
+                })
+            } else alternatives.firstOrNull()?.let {first->
+                offers.add(KeyPopPredictionContext.wordCase(first,word,before) to {replaceWord(first)})
+            }
+            offers.add(KeyPopPredictionContext.wordCase(word,word,before) to {replaceWord(word)})
+            val last=if(grammar!=null)alternatives.firstOrNull() else alternatives.getOrNull(1)
+            last?.let{candidate->
+                offers.add(KeyPopPredictionContext.wordCase(candidate,word,before) to {
+                    replaceWord(candidate)
+                })
+            }
+        }
+        // Merge RC42 grammar/personal candidates into RC40's existing
+        // three-position strip. Preserve the typed-word accept chip and
+        // existing RC40 grammar affordance wherever possible.
+        if(adaptiveOffers.isNotEmpty() && !hasSelectedRange && !translatorOpen && predLang==0) {
+            val additions=adaptiveOffers.mapNotNull { item ->
+                if(KeyPopAdaptiveCandidatePlanner.makePlan(before,"",item.replacement)==null)
+                    null
+                else item.display to { replaceWord(item.replacement) }
+            }.filter { (label,_) -> offers.none { it.first.equals(label,true) } }
+            if(additions.isNotEmpty()) {
+                val keepTyped=offers.firstOrNull { it.first.equals(word,true) }
+                val keepGrammar=if(grammar!=null)offers.firstOrNull() else null
+                val custom=additions.take(if(word.isBlank())2 else 1)
+                val combined=mutableListOf<Pair<String,()->Unit>>()
+                // Preserve RC40's explicit grammar correction if present.
+                if(keepGrammar!=null)combined.add(keepGrammar)
+                combined.addAll(custom.filterNot { custom ->
+                    combined.any { it.first.equals(custom.first,true) }
+                })
+                combined.addAll(offers.filterNot { old ->
+                    combined.any { it.first.equals(old.first,true) }
+                })
+                if(keepTyped!=null && combined.take(3).none {
+                        it.first.equals(keepTyped.first,true)
+                    }) {
+                    if(combined.size>=3)combined[2]=keepTyped else combined.add(keepTyped)
+                }
+                offers.clear()
+                offers.addAll(combined.take(3))
+            }
+        }
+        if(offers.isEmpty()) {
+            KeyPopSuggestionPresentation.waiting(bar,before.isNotBlank())
+            probeSuggestions(bar,word)
+            return
+        }
+        for(i in 0..2) {
+            val button=bar.getChildAt(i) as Button
+            val offer=offers.getOrNull(i)
+            if(offer==null) {
+                // Keep three equal-width positions like Gboard; a single
+                // typed word must never inflate into one giant full-width key.
+                button.visibility=View.INVISIBLE
+            } else {
+                button.text=offer.first
+                KeyPopSuggestionPresentation.markAvailable(button,offer.first)
+                button.setOnClickListener {tapFeedback(button);offer.second.invoke()}
+            }
+        }
+        probeSuggestions(bar,word)
+    }
+    /** Re-label only changed Latin keys instead of rebuilding the full IME. */
+    private fun updateShiftKeys() {
+        if(language!=0 && !prefs.getBoolean("romanMode",false))return
+        for((key,raw) in keyViews) {
+            if(raw.length!=1 || !raw[0].isLetter())continue
+            val old=key.text.toString()
+            val hint=if(old.contains('\n'))"\n"+old.substringAfter('\n') else ""
+            key.text=(if(shift||capsLock)raw.uppercase(Locale.ROOT)
+                else raw.lowercase(Locale.ROOT))+hint
+        }
+    }
+    /** Dictionary/user-learning writes are never performed on the key UI thread. */
+    private fun learnAsync(lang:Int,word:String) {
+        if(word.isBlank() || predictionExecutor.isShutdown ||
+            sensitive(currentInputEditorInfo) ||
+            !KeyPopTypingRules.textAllowsLearning(currentInputEditorInfo?.inputType?:0))return
+        predictionExecutor.execute {runCatching{lexicon.learn(lang,word)}}
+    }
+    /** Learns only explicitly committed words, never pasted clipboard text,
+     * previous chat messages, password fields, URLs or email inputs. */
+    private fun learnPersonalAsync(lang:Int,before:String,committed:String) {
+        if(predictionExecutor.isShutdown || sensitive(currentInputEditorInfo) ||
+            !KeyPopTypingRules.textAllowsLearning(
+                currentInputEditorInfo?.inputType?:0))return
+        if(!prefs.getBoolean("personalHistoryLearning",true))return
+        val parts=committed.trim().split(Regex("\\s+"))
+        if(parts.isEmpty()||parts.size>4)return
+        personalLearningExecutor.execute {
+            var context=before
+            for(word in parts) {
+                runCatching{personalLanguage.observe(lang,context,word)}
+                context+=word+" "
+            }
+        }
+    }
+    /** Feedback storage uses HMAC identities, never plaintext typed histories. */
+    private fun correctionFeedbackAsync(lang:Int,source:String,target:String,
+                                        accepted:Boolean) {
+        if(sensitive(currentInputEditorInfo) ||
+            !KeyPopTypingRules.textAllowsLearning(
+                currentInputEditorInfo?.inputType?:0))return
+        personalLearningExecutor.execute {
+            runCatching{personalLanguage.feedback(lang,source,target,accepted)}
+        }
+    }
+
+    /** Always delete a selection as a whole before considering correction undo.
+     * Reuse the same logic for single taps and held-backspace repeats. */
+    private fun deleteBackwardFromEditor(allowCorrectionUndo:Boolean=true) {
+        pendingSuggestionBoundary=null
+        val connection=currentInputConnection
+        val hasSelection=hasSelectedRange ||
+            (connection?.getSelectedText(0)?.isNotEmpty()==true)
+        if(hasSelection) {
+            KeyPopEditorActions.deleteBackward(connection,selectionReported=true)
+            editorContext.clear()
+            hasSelectedRange=false
+            lastAppliedCorrection=null
+            return
+        }
+        val entry=if(allowCorrectionUndo)lastAppliedCorrection else null
+        val preceding=if(entry!=null)
+            connection?.getTextBeforeCursor(entry.corrected.length+1,0)?.toString().orEmpty()
+            else ""
+        if(entry!=null && entry.editor==currentInputEditorInfo?.packageName &&
+            KeyPopTypingRules.canUndoRecentCorrection(preceding,entry.original,
+                entry.corrected,SystemClock.elapsedRealtime()-entry.time)) {
+            lastRejectedCorrection=entry.original to entry.corrected
+            val feedbackLanguage=if(language!=0 &&
+                prefs.getBoolean("romanMode",false))0 else language
+            correctionFeedbackAsync(feedbackLanguage,entry.original,
+                entry.corrected,false)
+            connection?.beginBatchEdit()
+            connection?.deleteSurroundingText(entry.corrected.length+1,0)
+            connection?.commitText(entry.original,1)
+            connection?.endBatchEdit()
+            editorContext.clear()
+        } else {
+            when(KeyPopEditorActions.deleteBackward(connection)) {
+                KeyPopEditorActions.Deletion.CODE_POINT -> editorContext.deletedCodePoint()
+                else -> editorContext.clear()
+            }
+        }
+        lastAppliedCorrection=null
+    }
+
+    private fun press(value:String) {
+        val pressStart=SystemClock.elapsedRealtimeNanos()
+        lastKeyboardTouchAt=SystemClock.uptimeMillis()
+        try {
+        if(translatorOpen && translateDraftMode &&
+            KeyPopTranslationDraft.handles(value)) {
+            if(value=="↵") {translateBeforeSend();return}
+            if(value=="SPACE" && prefs.getBoolean("autoCorrect",true)) {
+                val fragment=trailingWordPattern.find(translateDraft)?.value.orEmpty()
+                val corrected=latestSpaceAdvice?.takeIf {
+                    it.language==language && it.word==fragment
+                }?.correction ?:lexicon.fastCorrection(language,fragment)
+                if(corrected!=null) {
+                    translateDraft=translateDraft.dropLast(fragment.length)+
+                        KeyPopPredictionContext.wordCase(corrected,fragment,translateDraft)
+                }
+            }
+            translateDraft=KeyPopTranslationDraft.edit(
+                translateDraft,value,shift,prefs.getBoolean("autoCap",true),
+                prefs.getBoolean("autoPunctuate",true))
+            translateSource=translateDraft
+            liveSourceView?.text=translateDraft
+            if(value.length==1 && shift && !capsLock) {
+                shift=false;updateShiftKeys()
+            }
+            requestSuggestionRefresh()
+            scheduleLiveTranslation(130)
+            return
+        }
+        if(value!="⌫" && value!="SPACE")lastAppliedCorrection=null
+        if(emojiOpen && emojiSearch) {
+            when(value) {
+                "⌫" -> emojiQuery=emojiQuery.dropLast(1)
+                "SPACE" -> emojiQuery+=" "
+                "↵","?123","ABC" -> {emojiSearch=false;emojiQuery=""}
+                "⇧" -> {shift=!shift}
+                "🌐" -> {emojiSearch=false;emojiQuery="";cycleLanguage();return}
+                else -> if(value.length==1 && value[0].isLetterOrDigit())
+                    emojiQuery+=value.lowercase(Locale.ROOT)
+            }
+            draw();return
+        }
+        when(value) {
+            "⌫" -> {
+                deleteBackwardFromEditor()
+                requestSuggestionRefresh()
+            }
+            "⇧" -> {
+                if(language==0 || (prefs.getBoolean("romanMode",false) && language!=0)) {
+                    val now=System.currentTimeMillis()
+                    if(now-lastShiftPress<420) { capsLock=!capsLock;shift=capsLock }
+                    else if(capsLock) {capsLock=false;shift=false}
+                    else shift=!shift
+                    lastShiftPress=now
+                }
+                updateShiftKeys()
+            }
+            "SPACE" -> {
+                // Chrome's omnibox can advertise generic text. URL-like tokens
+                // must bypass autocorrect, punctuation and spacing rewrites.
+                val uriConnection=currentInputConnection
+                val uriBefore=runCatching {
+                    uriConnection?.getTextBeforeCursor(220,0)?.toString().orEmpty()
+                }.getOrDefault("")
+                val uriAfter=runCatching {
+                    uriConnection?.getTextAfterCursor(48,0)?.toString().orEmpty()
+                }.getOrDefault("")
+                if(KeyPopUrlEditingPolicy.touchesUrlOrEmail(uriBefore,uriAfter)) {
+                    pendingSuggestionBoundary=null
+                    latestSpaceAdvice=null
+                    editorContext.clear()
+                    uriConnection?.commitText(" ",1)
+                    requestSuggestionRefresh()
+                    return
+                }
+                val boundary=pendingSuggestionBoundary
+                pendingSuggestionBoundary=null
+                if(boundary!=null &&
+                    boundary.targetPackage==currentInputEditorInfo?.packageName &&
+                    SystemClock.elapsedRealtime()-boundary.acceptedAtMs<=5000L) {
+                    val preceding=currentInputConnection?.getTextBeforeCursor(
+                        boundary.word.length+1,0)?.toString()
+                    // Tapping Space immediately after an accepted suggestion
+                    // should not produce a duplicate or a stray full stop.
+                    if(preceding?.endsWith(boundary.word+" ")==true) {
+                        requestSuggestionRefresh()
+                        return
+                    }
+                }
+                lastAppliedCorrection=null
+                if(!sensitive(currentInputEditorInfo)) {
+                    if(language!=0 && prefs.getBoolean("romanMode",false)) {
+                        val roman=currentInputConnection?.getTextBeforeCursor(60,0)?.toString()
+                            .orEmpty()
+                        val word=Regex("[A-Za-z]+$").find(roman)?.value
+                        if(word!=null) {
+                            val converted=KeyPopRoman.convert(language,word)
+                            if(converted!=word) {
+                                editorContext.clear()
+                                currentInputConnection?.beginBatchEdit()
+                                currentInputConnection?.deleteSurroundingText(word.length,0)
+                                currentInputConnection?.commitText(converted,1)
+                                currentInputConnection?.endBatchEdit()
+                            }
+                        }
+                    }
+                    if(KeyPopTypingRules.autoPunctuationEnabled(
+                            prefs.getBoolean("autoPunctuate",true),
+                            currentInputEditorInfo?.inputType?:0) &&
+                        prefs.getBoolean("doubleSpace",true)) {
+                        val last=currentInputConnection?.let{readContext(it,2)}.orEmpty()
+                        if(last.length==2 && last.last()==' ' && last.first().isLetter()) {
+                            editorContext.clear()
+                            currentInputConnection?.deleteSurroundingText(1,0)
+                            currentInputConnection?.commitText(". ",1)
+                            requestSuggestionRefresh()
+                            scheduleLiveTranslation(260)
+                            return
+                        }
+                    }
+                    val before=currentInputConnection?.let{readContext(it,48)}.orEmpty()
+                    val word=trailingWordPattern.find(before)?.value.orEmpty()
+                    if(word.isNotBlank()) {
+                        // Roman key events are Latin, but after a Space
+                        // converts the word, store the resulting word under
+                        // its native Urdu/Sindhi language, not English.
+                        val predLang=language
+                        val inputType=currentInputEditorInfo?.inputType?:0
+                        val corrected=if(KeyPopTypingRules.autocorrectEnabled(
+                                prefs.getBoolean("autoCorrect",true),inputType)) {
+                            // Only precomputed spelling or fixed verified typos
+                            // are allowed here. Dictionary scans stay off UI.
+                            val cached=latestSpaceAdvice?.takeIf {
+                                it.language==predLang && it.word==word &&
+                                    it.before.takeLast(48)==before
+                            }?.correction
+                            val candidate=(cached ?:lexicon.fastCorrection(predLang,word))
+                                ?.takeUnless{lastRejectedCorrection==
+                                    (word to it)}
+                            if(!prefs.getBoolean("correctMissingSpaces",true) &&
+                                candidate?.contains(' ')==true)
+                                null else candidate
+                        } else null
+                        // Grammar hints are suggestions, not forced edits. Optional
+                        // auto-grammar has its own setting and respects autocorrect off.
+                        val grammar=if(prefs.getBoolean("autoGrammarApply",true) &&
+                            KeyPopTypingRules.autocorrectEnabled(
+                                prefs.getBoolean("autoCorrect",true),inputType) &&
+                            prefs.getBoolean("grammarHints",true))
+                            latestSpaceAdvice?.takeIf {
+                                it.language==predLang && it.before.takeLast(48)==before
+                            }?.grammar ?: KeyPopGrammarRules.suggest(before,predLang)
+                            else null
+                        val committed=if(grammar!=null && grammar.automatic &&
+                            grammar.remove<=before.length) {
+                            editorContext.clear()
+                            currentInputConnection?.deleteSurroundingText(grammar.remove,0)
+                            currentInputConnection?.commitText(grammar.replacement,1)
+                            learnAsync(predLang,grammar.replacement.substringAfterLast(' '))
+                            grammar.replacement
+                        } else if(corrected!=null) {
+                            editorContext.clear()
+                            currentInputConnection?.deleteSurroundingText(word.length,0)
+                            val final=KeyPopTypingRules.preservesCase(word,corrected)
+                            currentInputConnection?.commitText(final,1)
+                            learnAsync(predLang,final.substringAfterLast(' '))
+                            lastAppliedCorrection=AppliedCorrection(word,final,
+                                currentInputEditorInfo?.packageName.orEmpty(),
+                                SystemClock.elapsedRealtime())
+                            final
+                        } else {
+                            learnAsync(predLang,word)
+                            word
+                        }
+                        learnPersonalAsync(predLang,before.dropLast(word.length),committed)
+                    }
+                }
+                editorContext.committed(" ")
+                if(currentInputConnection?.commitText(" ",1)!=true)editorContext.clear()
+                latestSpaceAdvice=null
+                requestSuggestionRefresh()
+            }
+            "🌐" -> cycleLanguage()
+            "☺,","☺" ->{
+                if(!sensitive(currentInputEditorInfo)){
+                    emojiOpen=true;clipsOpen=false;translatorOpen=false
+                    draw()
+                } else currentInputConnection?.commitText(",",1)
+            }
+            "?123" -> { symbols=true;draw() }
+            "ABC" -> { symbols=false;draw() }
+            "↵" -> {
+                pendingSuggestionBoundary=null
+                val info=currentInputEditorInfo
+                if(KeyPopEnterPolicy.insertsNewline(info)) {
+                    // WhatsApp may advertise SEND, DONE or NEXT even for
+                    // its message composer. Never dispatch these actions from
+                    // the visible Enter key: they may send or dismiss the IME.
+                    val connection=currentInputConnection
+                    editorContext.committed("\n")
+                    if(connection?.commitText("\n",1)!=true)
+                        editorContext.clear()
+                    requestSuggestionRefresh()
+                } else if(mayTranslateOnSend() &&
+                    !sensitive(info) && !numeric(info)) {
+                    translateBeforeSend()
+                    return
+                } else {
+                    val action=(info?.imeOptions ?: 0) and EditorInfo.IME_MASK_ACTION
+                    if(action!=EditorInfo.IME_ACTION_NONE && action!=EditorInfo.IME_ACTION_UNSPECIFIED)
+                        currentInputConnection?.performEditorAction(action)
+                    else currentInputConnection?.commitText("\n",1)
+                }
+            }
+            else -> {
+                val connection=currentInputConnection
+                val boundary=pendingSuggestionBoundary?.takeIf {
+                    it.targetPackage==currentInputEditorInfo?.packageName &&
+                        SystemClock.elapsedRealtime()-it.acceptedAtMs<=5000L
+                }
+                pendingSuggestionBoundary=null
+                val prior=connection?.let{readContext(it,120)}.orEmpty()
+                val sentenceStart=prior.isBlank() || prior.trimEnd().lastOrNull() in listOf('.','!','?','\n')
+                val latinMode=language==0 || prefs.getBoolean("romanMode",false)
+                val inputType=currentInputEditorInfo?.inputType?:0
+                val capital=shift || (latinMode && !sensitive(currentInputEditorInfo) &&
+                    KeyPopTypingRules.textAllowsAutomaticChanges(inputType) &&
+                    prefs.getBoolean("autoCap",true) && sentenceStart)
+                val variation=(currentInputEditorInfo?.inputType ?: 0) and
+                    InputType.TYPE_MASK_VARIATION
+                val noAutoSpace=variation in setOf(InputType.TYPE_TEXT_VARIATION_URI,
+                    InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS,
+                    InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS)
+                val punct=value in setOf(",",".","!","?","،","؟","۔")
+                val doAutoPunct=punct && !noAutoSpace &&
+                    KeyPopTypingRules.autoPunctuationEnabled(
+                        prefs.getBoolean("autoPunctuate",true),
+                        currentInputEditorInfo?.inputType?:0) &&
+                    prior.trimEnd().lastOrNull()?.isLetterOrDigit()==true
+                val punctuationAfterSuggestion=punct && boundary!=null &&
+                    prior.endsWith(boundary.word+" ")
+                if((doAutoPunct || punctuationAfterSuggestion) && prior.endsWith(" ")) {
+                    editorContext.deletedCharacters(1)
+                    if(connection?.deleteSurroundingText(1,0)!=true)
+                        editorContext.clear()
+                }
+                // Browser editors can drop the space committed with a selected
+                // word. Recover exactly one before the next letter/digit.
+                val recoverSpace=boundary!=null && value.length==1 &&
+                    value[0].isLetterOrDigit() &&
+                    KeyPopPredictionContext.needsBoundarySpace(prior,boundary.word)
+                val characters=(if(recoverSpace)" " else "")+
+                    (if(capital && latinMode)
+                        value.uppercase(Locale.ROOT) else value)+
+                        (if(doAutoPunct)" " else "")
+                editorContext.committed(characters)
+                if(connection?.commitText(characters,1)!=true)
+                    editorContext.clear()
+                if(shift && latinMode && !capsLock) {
+                    shift=false
+                    updateShiftKeys()
+                }
+                requestSuggestionRefresh()
+            }
+        }
+        scheduleLiveTranslation()
+        } finally {
+            KeyPopDiagnostics.observeKeyPress(this,
+                SystemClock.elapsedRealtimeNanos()-pressStart)
+        }
+    }
+    private fun cycleLanguage() {
+        language=(language+1)%3
+        prefs.edit().putInt("language",language).apply()
+        shift=false;capsLock=false;symbols=false;clipsOpen=false;emojiOpen=false;extended=false;draw()
+    }
+    private fun showWritingPanel(root:LinearLayout) {
+        val skin=palette()
+        val panel=LinearLayout(this).apply{
+            orientation=LinearLayout.VERTICAL
+            setPadding(d(8),d(7),d(8),d(7))
+            background=gradient(skin.surface,skin.background,12)
+        }
+        panel.addView(TextView(this).apply{
+            text="PRIVATE WRITING TOOLS  ·  Offline · Rule-based"
+            textSize=11f;setTextColor(skin.accent)
+        })
+        panel.addView(TextView(this).apply{
+            text=if(writingSource.isBlank())"Select or type text in the app first."
+                else "Original: "+writingSource.take(140)
+            textSize=12f;setTextColor(skin.ink)
+            setPadding(0,d(4),0,d(5))
+        })
+        val modes=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
+        listOf("Formal","Polite","Concise","Punctuate").forEach { mode->
+            modes.addView(chip(if(writingMode==mode)"✓ "+mode else mode) {
+                writingMode=mode
+                writingPreview=KeyPopWritingTools.rewrite(writingSource,mode,language)
+                draw()
+            },LinearLayout.LayoutParams(0,d(37),1f).apply{rightMargin=d(3)})
+        }
+        panel.addView(modes)
+        if(writingPreview.isBlank() && writingSource.isNotBlank())
+            writingPreview=KeyPopWritingTools.rewrite(writingSource,writingMode,language)
+        panel.addView(TextView(this).apply{
+            text=if(writingPreview.isBlank())"No preview yet" else writingPreview.take(300)
+            textSize=13f;setTextColor(skin.ink);setPadding(d(3),d(7),d(3),d(8))
+        })
+        val buttons=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
+        fun action(label:String,fn:()->Unit) {
+            buttons.addView(chip(label,onTap=fn),
+                LinearLayout.LayoutParams(0,d(36),1f).apply{rightMargin=d(3)})
+        }
+        action("Replace") {
+            val input=currentInputConnection
+            if(input!=null && writingPreview.isNotBlank() && !sensitive(currentInputEditorInfo)) {
+                val selected=input.getSelectedText(0)?.toString()
+                val before=input.getTextBeforeCursor(writingSource.length,0)?.toString()
+                if(selected==writingSource || before==writingSource) {
+                    input.beginBatchEdit()
+                    if(selected!=writingSource)input.deleteSurroundingText(writingSource.length,0)
+                    input.commitText(writingPreview,1)
+                    input.endBatchEdit()
+                    writingOpen=false;draw()
+                } else Toast.makeText(this,"Text changed: reopen writing tools",Toast.LENGTH_SHORT).show()
+            }
+        }
+        action("Copy") {
+            if(writingPreview.isNotBlank())
+                clipboard.setPrimaryClip(ClipData.newPlainText("KeyPop rewrite",writingPreview))
+        }
+        action("Close") {writingOpen=false;draw()}
+        panel.addView(buttons)
+        if(prefs.getBoolean("smartReplies",true)) {
+            panel.addView(TextView(this).apply{
+                text="QUICK REPLIES · Tap to insert"
+                textSize=10f;setTextColor(skin.accent)
+                setPadding(0,d(7),0,d(3))
+            })
+            val replies=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
+            KeyPopTypingIntelligence.contextualReplies(language,writingSource).take(3).forEach { reply ->
+                replies.addView(chip(reply.take(24)) {
+                    if(!sensitive(currentInputEditorInfo)) {
+                        currentInputConnection?.commitText(reply,1)
+                        writingOpen=false;draw()
+                    }
+                },LinearLayout.LayoutParams(0,d(43),1f).apply{rightMargin=d(3)})
+            }
+            panel.addView(replies)
+        }
+        root.addView(panel)
+    }
+
+    /** Text belongs to the active editor, not KeyPop's Settings Activity. */
+    private fun editorTranslationText():String {
+        if(translatorOpen && translateDraftMode)return translateDraft.takeLast(1200)
+        val input=currentInputConnection?:return ""
+        return (input.getSelectedText(0)?.toString()?.takeIf{it.isNotBlank()}
+            ?:input.getTextBeforeCursor(2400,0)?.toString().orEmpty()).takeLast(1200)
+    }
+
+    private fun stopLiveTranslation() {
+        liveRevision++
+        liveHandler.removeCallbacksAndMessages(null)
+        liveSourceView=null;liveResultView=null
+    }
+
+    /** Debounce both physical editor updates and KeyPop's own key presses. */
+    private fun scheduleLiveTranslation(waitMs:Long=300L,manual:Boolean=false) {
+        if(!translatorOpen || (!liveTranslationEnabled && !manual) ||
+            sensitive(currentInputEditorInfo) || numeric(currentInputEditorInfo))return
+        liveRevision++
+        val revision=liveRevision
+        liveHandler.removeCallbacksAndMessages(null)
+        val debounce=if(googleEasyMode && !manual)maxOf(waitMs,550L) else waitMs
+        liveHandler.postDelayed({
+            if(revision!=liveRevision || !translatorOpen ||
+                (!liveTranslationEnabled && !manual))return@postDelayed
+            val text=editorTranslationText()
+            translateSource=text
+            liveSourceView?.text=if(text.isBlank())
+                (if(translateDraftMode)"Type here to translate…"
+                else "Type in the active app…") else text.takeLast(180)
+            translateResult=""
+            if(text.isBlank()) {
+                translationStatus="Translation appears as you type."
+                liveResultView?.text=translationStatus
+                return@postDelayed
+            }
+            val source=if(translateSourceChoice<0)
+                KeyPopTextLanguage.detect(text,language) else translateSourceChoice
+            if(source==translateTarget) {
+                translationStatus="Choose a different target language."
+                liveResultView?.text=translationStatus
+                return@postDelayed
+            }
+            if(googleEasyMode && (!KeyPopCloudTranslation.configured(this) ||
+                !prefs.getBoolean("googleCloudConsent",false))) {
+                translationStatus="Google Cloud requires an API key and consent in Settings."
+                liveResultView?.text=translationStatus
+                return@postDelayed
+            }
+            val requestedGoogleMode=googleEasyMode
+            translationStatus=if(requestedGoogleMode)"Google Cloud translating…"
+                else "Translating offline…"
+            liveResultView?.text=translationStatus
+            val callback:(Result<String>)->Unit={outcome->
+                if(revision==liveRevision && translatorOpen &&
+                    googleEasyMode==requestedGoogleMode && editorTranslationText()==text) {
+                    outcome.onSuccess{
+                        translateResult=it
+                        previewSource=text
+                        previewDirection=codes[source]+"-"+codes[translateTarget]
+                        previewGoogle=requestedGoogleMode
+                        translationStatus=""
+                        // Preserve all key and prediction views; no full redraw.
+                        liveResultView?.text=it
+                    }.onFailure{
+                        translationStatus=it.localizedMessage?:"Translation unavailable"
+                        liveResultView?.text=translationStatus
+                    }
+                }
+            }
+            if(requestedGoogleMode)
+                KeyPopCloudTranslation.translate(this,codes[source],codes[translateTarget],text,callback)
+            else
+                KeyPopTranslator.translate(this,codes[source],codes[translateTarget],text,
+                    false,"",callback)
+        },debounce)
+    }
+
+    /** Gboard-style compact live translation panel above the always-available
+     * toolbar. It reads the active editor and never implies Google Cloud is free
+     * or a downloaded offline model; its credentials are user supplied. */
+    private fun showCompactTranslator(root:LinearLayout) {
+        val style=palette()
+        val container=LinearLayout(this).apply {
+            orientation=LinearLayout.VERTICAL
+            setPadding(d(5),d(5),d(5),d(4))
+            background=gradient(style.surface,style.background,11)
+        }
+        fun cell(label:String,weight:Float,click:()->Unit)=chip(label,onTap=click).apply {
+            textSize=11f;maxLines=1;isAllCaps=false
+        } to weight
+        fun add(row:LinearLayout,label:String,weight:Float,click:()->Unit) {
+            val pair=cell(label,weight,click)
+            row.addView(pair.first,LinearLayout.LayoutParams(0,d(33),pair.second).apply {
+                leftMargin=d(2);rightMargin=d(2)
+            })
+        }
+        val detected=KeyPopTextLanguage.detect(translateSource,language)
+        val from=if(translateSourceChoice<0)detected else translateSourceChoice
+        val top=LinearLayout(this).apply {
+            orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL
+        }
+        add(top,"In app",.75f) {
+            Toast.makeText(this,"Type at the cursor in your app; translation previews here.",
+                Toast.LENGTH_SHORT).show()
+        }
+        add(top,if(translateSourceChoice<0)"Detect language"
+            else languages[from],1.42f) {
+            translateSourceChoice=if(translateSourceChoice<0)
+                KeyPopEasyTranslateDirections.nextSource(-1,translateTarget)
+            else {
+                val next=KeyPopEasyTranslateDirections.nextSource(
+                    translateSourceChoice,translateTarget)
+                if(next<=translateSourceChoice)-1 else next
+            }
+            translateResult="";draw();scheduleLiveTranslation(60)
+        }
+        add(top,"⇄",.42f) {
+            translateSourceChoice=translateTarget
+            translateTarget=from
+            translateResult="";draw();scheduleLiveTranslation(60)
+        }
+        add(top,languages[translateTarget],1.25f) {
+            translateTarget=KeyPopEasyTranslateDirections.nextTarget(translateTarget,from)
+            translateResult="";draw();scheduleLiveTranslation(60)
+        }
+        add(top,"×",.40f) {
+            translatorOpen=false;stopLiveTranslation();draw()
+        }
+        container.addView(top)
+        val live=LinearLayout(this).apply {
+            orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL
+            setPadding(d(7),d(4),d(7),d(4))
+            background=gradient(style.background,style.surface,8)
+        }
+        val source=TextView(this).apply {
+            text=translateSource.ifBlank{
+                if(translateDraftMode)"Type here to translate…"
+                else "Type in the active app to translate"
+            }
+            textSize=12f;setTextColor(style.ink)
+            maxLines=2;ellipsize=android.text.TextUtils.TruncateAt.END
+        }
+        liveSourceView=source
+        live.addView(source,LinearLayout.LayoutParams(0,d(45),1f))
+        val arrow=TextView(this).apply {
+            text="→";textSize=18f;gravity=Gravity.CENTER;setTextColor(style.accent)
+        }
+        live.addView(arrow,LinearLayout.LayoutParams(d(22),d(45)))
+        val translated=TextView(this).apply {
+            text=translateResult.ifBlank{translationStatus.ifBlank{"Translation appears here"}}
+            textSize=12f;setTextColor(style.ink)
+            maxLines=2;ellipsize=android.text.TextUtils.TruncateAt.END
+        }
+        liveResultView=translated
+        live.addView(translated,LinearLayout.LayoutParams(0,d(45),1f))
+        container.addView(live)
+        val actions=LinearLayout(this).apply {
+            orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL
+        }
+        add(actions,if(googleEasyMode)"Offline" else "✓ Offline",1f) {
+            googleEasyMode=false;translateResult=""
+            draw();scheduleLiveTranslation(50)
+        }
+        add(actions,if(googleEasyMode)"✓ Cloud" else "Cloud",.92f) {
+            googleEasyMode=true;translateResult=""
+            draw();scheduleLiveTranslation(50)
+        }
+        add(actions,"Copy",.67f) {
+            if(translateResult.isNotBlank()) {
+                clipboard.setPrimaryClip(ClipData.newPlainText("KeyPop",translateResult))
+                Toast.makeText(this,"Translation copied",Toast.LENGTH_SHORT).show()
+            }
+        }
+        add(actions,"Replace",.87f) {
+            val current=currentInputConnection
+            val draft=translateDraftMode
+            val before=if(draft)translateDraft
+                else current?.getTextBeforeCursor(translateSource.length,0)?.toString()
+            if(current!=null && translateResult.isNotBlank() && before==translateSource &&
+                !sensitive(currentInputEditorInfo)) {
+                current.beginBatchEdit()
+                if(!draft)current.deleteSurroundingText(translateSource.length,0)
+                val accepted=current.commitText(translateResult,1)
+                current.endBatchEdit()
+                if(accepted) {
+                    translateDraft=""
+                    translatorOpen=false;stopLiveTranslation();draw()
+                }else Toast.makeText(this,"Editor rejected translation",
+                    Toast.LENGTH_SHORT).show()
+            }else Toast.makeText(this,
+                "Translation unavailable or input changed; nothing replaced",
+                Toast.LENGTH_SHORT).show()
+        }
+        add(actions,"Send",.65f){translateBeforeSend()}
+        container.addView(actions)
+        root.addView(container,LinearLayout.LayoutParams(-1,-2))
+    }
+
+    private fun showTranslator(root:LinearLayout) {
+        if(prefs.getBoolean("compactTranslate",true)) {
+            showCompactTranslator(root)
+            return
+        }
+        val style=palette()
+        val panel=LinearLayout(this).apply{
+            orientation=LinearLayout.VERTICAL
+            setPadding(d(9),d(8),d(9),d(7))
+            background=gradient(style.surface,style.background,12)
+        }
+        val title=TextView(this).apply{
+            text="EASY TRANSLATE  ·  LIVE"
+            textSize=11f;setTextColor(style.accent)
+        }
+        panel.addView(title)
+        val controls=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
+        fun small(label:String,weight:Float=1f,onTap:()->Unit){
+            controls.addView(chip(label,onTap=onTap).apply {
+                textSize=11f;maxLines=1
+            },LinearLayout.LayoutParams(0,d(38),weight).apply{rightMargin=d(3)})
+        }
+        val detected=KeyPopTextLanguage.detect(translateSource,language)
+        val from=if(translateSourceChoice<0)detected else translateSourceChoice
+        small(if(translateSourceChoice<0)"From: Auto" else "From: "+languages[from],1.15f){
+            translateSourceChoice=if(translateSourceChoice<0)
+                KeyPopEasyTranslateDirections.nextSource(-1,translateTarget)
+            else {
+                val next=KeyPopEasyTranslateDirections.nextSource(
+                    translateSourceChoice,translateTarget)
+                if(next<=translateSourceChoice)-1 else next
+            }
+            translateResult="";draw();scheduleLiveTranslation(50)
+        }
+        small("⇄",0.38f){
+            val oldFrom=from
+            translateSourceChoice=translateTarget
+            translateTarget=oldFrom
+            translateResult="";draw();scheduleLiveTranslation(50)
+        }
+        small("To: "+languages[translateTarget],1.15f){
+            translateTarget=KeyPopEasyTranslateDirections.nextTarget(translateTarget,from)
+            translateResult="";draw();scheduleLiveTranslation(50)
+        }
+        small("×",0.38f){translatorOpen=false;stopLiveTranslation();draw()}
+        panel.addView(controls)
+        val modes=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
+        fun mode(label:String,weight:Float=1f,onTap:()->Unit) {
+            modes.addView(chip(label,onTap=onTap).apply{textSize=11f;maxLines=1},
+                LinearLayout.LayoutParams(0,d(34),weight).apply{rightMargin=d(3)})
+        }
+        mode(if(!googleEasyMode)"✓ KeyPop offline" else "KeyPop offline"){
+            googleEasyMode=false;translateResult=""
+            draw();scheduleLiveTranslation(50)
+        }
+        mode(if(googleEasyMode)"✓ Google Cloud" else "Google Cloud"){
+            googleEasyMode=true;translateResult=""
+            draw();scheduleLiveTranslation(50)
+        }
+        mode(if(liveTranslationEnabled)"● Live" else "○ Live",0.7f) {
+            liveTranslationEnabled=!liveTranslationEnabled
+            if(!liveTranslationEnabled)stopLiveTranslation()
+            draw()
+            if(liveTranslationEnabled)scheduleLiveTranslation(60)
+        }
+        panel.addView(modes)
+        val sourceCard=LinearLayout(this).apply {
+            orientation=LinearLayout.VERTICAL
+            setPadding(d(9),d(7),d(9),d(7))
+            background=gradient(style.background,style.surface,9)
+        }
+        sourceCard.addView(TextView(this).apply{
+            text="SOURCE · "+languages[from]
+            textSize=10f;setTextColor(style.accent)
+        })
+        val inputText=TextView(this).apply {
+            text=if(translateSource.isBlank())"Type in the active app…"
+                else translateSource.takeLast(180)
+            textSize=12f;setTextColor(style.ink);maxLines=3
+        }
+        liveSourceView=inputText
+        sourceCard.addView(inputText)
+        panel.addView(sourceCard)
+        val resultCard=LinearLayout(this).apply{
+            orientation=LinearLayout.VERTICAL
+            setPadding(d(9),d(7),d(9),d(7))
+            background=gradient(style.surface,style.background,9)
+        }
+        resultCard.addView(TextView(this).apply{
+            text="TRANSLATION · "+languages[translateTarget]
+            textSize=10f;setTextColor(style.accent)
+        })
+        val resultView=TextView(this).apply {
+            text=if(translateResult.isBlank())
+                translationStatus.ifBlank{"Live preview appears here"} else translateResult
+            textSize=13f;setTextColor(style.ink);maxLines=4
+        }
+        liveResultView=resultView
+        resultCard.addView(resultView)
+        panel.addView(resultCard)
+        val actions=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
+        fun action(label:String,fn:()->Unit) {
+            actions.addView(chip(label,onTap=fn).apply{textSize=11f},
+                LinearLayout.LayoutParams(0,d(36),1f).apply{rightMargin=d(3)})
+        }
+        fun replaceInEditor(replace:Boolean):Boolean {
+            if(translateResult.isBlank())return false
+            val input=currentInputConnection?:return false
+            if(replace) {
+                val selected=input.getSelectedText(0)?.toString()
+                val before=input.getTextBeforeCursor(translateSource.length,0)?.toString()
+                if(selected!=translateSource && before!=translateSource) {
+                    translationStatus="Editor text changed. Recheck live preview."
+                    translateResult="";draw();scheduleLiveTranslation(50)
+                    return false
+                }
+                input.beginBatchEdit()
+                if(selected!=translateSource)input.deleteSurroundingText(translateSource.length,0)
+                val ok=input.commitText(translateResult,1)
+                input.endBatchEdit()
+                return ok
+            }
+            return input.commitText(translateResult,1)
+        }
+        action("Insert"){if(replaceInEditor(false)){translatorOpen=false;stopLiveTranslation();draw()}}
+        action("Replace"){if(replaceInEditor(true)){translatorOpen=false;stopLiveTranslation();draw()}}
+        action("Copy"){
+            if(translateResult.isNotBlank()) {
+                clipboard.setPrimaryClip(ClipData.newPlainText("KeyPop translation",translateResult))
+                Toast.makeText(this,"Translation copied",Toast.LENGTH_SHORT).show()
+            }
+        }
+        action(if(liveTranslationEnabled)"Refresh" else "Translate"){
+            scheduleLiveTranslation(0,manual=true)
+        }
+        panel.addView(actions)
+        if(googleEasyMode && (!KeyPopCloudTranslation.configured(this) ||
+            !prefs.getBoolean("googleCloudConsent",false))) {
+            panel.addView(chip("Set up Google Cloud API key ↗"){
+                startActivity(Intent(this,MainActivity::class.java)
+                    .putExtra("openSection","translation").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP))
+            },LinearLayout.LayoutParams(-1,d(36)))
+        }
+        root.addView(panel)
+    }
+    /** Compact, asynchronous clipboard UI. Text clips and screenshots are
+     * separate tabs; the keyboard's keypress thread never decrypts images. */
+    private fun drawClips(root:LinearLayout) {
+        val style=palette()
+        val generation=++clipPanelGeneration
+        fun text(label:String,size:Float=13f)=TextView(this).apply {
+            this.text=label;textSize=size;setTextColor(style.ink)
+            setPadding(d(5),d(4),d(5),d(4))
+        }
+        val heading=LinearLayout(this).apply{
+            orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL
+        }
+        heading.addView(text("Clipboard",17f),LinearLayout.LayoutParams(0,d(37),1f))
+        heading.addView(chip("Done ×"){clipsOpen=false;draw()},
+            LinearLayout.LayoutParams(d(84),d(34)))
+        root.addView(heading)
+
+        val tabs=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
+        tabs.addView(chip(if(clipTab==0)"● Text" else "Text") {
+            if(clipTab!=0){clipTab=0;clipPage=0;draw()}
+        },LinearLayout.LayoutParams(0,d(38),1f))
+        tabs.addView(chip(if(clipTab==1)"● Screenshots" else "Screenshots") {
+            if(clipTab!=1){clipTab=1;draw()}
+        },LinearLayout.LayoutParams(0,d(38),1f))
+        root.addView(tabs)
+
+        val content=LinearLayout(this).apply {
+            orientation=LinearLayout.VERTICAL
+            setPadding(d(5),d(7),d(5),d(3))
+            addView(text("Loading history…",12f))
+        }
+        root.addView(ScrollView(this).apply {
+            isVerticalScrollBarEnabled=false
+            addView(content)
+        },LinearLayout.LayoutParams(-1,d(205)))
+
+        val footer=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
+        if(clipTab==0) {
+            footer.addView(chip("Search / manage text"){
+                startActivity(Intent(this,KeyPopClipboardActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            },LinearLayout.LayoutParams(-1,d(38)))
+        }else{
+            footer.addView(chip("View all"){
+                startActivity(Intent(this,KeyPopScreenshotHistoryActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            },LinearLayout.LayoutParams(0,d(38),1f))
+            footer.addView(chip("＋ Import"){
+                startActivity(Intent(this,KeyPopImageImportActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            },LinearLayout.LayoutParams(0,d(38),1f))
+        }
+        root.addView(footer)
+        if(clipTab==0) {
+            if(!prefs.getBoolean("history",false)) {
+                content.removeAllViews()
+                content.addView(text("No saved text clips yet",16f))
+                content.addView(text("Enable history to retain future copies.",12f))
+                content.addView(chip("Enable clipboard history"){
+                    prefs.edit().putBoolean("history",true).apply()
+                    clipPage=0;draw()
+                },LinearLayout.LayoutParams(-1,d(43)))
+                return
+            }
+            val page=clipPage
+            val pinned=pinnedOnly
+            clipExecutor.execute {
+                val result=runCatching {
+                    Pair(clipStore.page(12,page*12,pinned),clipStore.count(pinned))
+                }
+                predictionHandler.post {
+                    if(!clipsOpen || clipTab!=0 || generation!=clipPanelGeneration)return@post
+                    content.removeAllViews()
+                    result.onFailure {
+                        content.addView(text("Unable to read saved text; no clips were deleted."))
+                    }.onSuccess { (clips,total)->
+                        content.addView(text(if(pinned)"Pinned text clips"
+                            else total.toString()+" saved text clips",12f))
+                        if(clips.isEmpty()) {
+                            content.addView(text(if(pinned)"No pinned clips yet"
+                                else "No saved text yet",15f))
+                            content.addView(text(if(pinned)"Pin a clip in your history."
+                                else "Copy text while KeyPop is active.",12f))
+                        }
+                        for(clip in clips) {
+                            val row=LinearLayout(this).apply {
+                                orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL
+                            }
+                            val label=(if(clip.pinned)"📌 " else "")+
+                                clip.text.replace('\n',' ').take(60)
+                            row.addView(chip(label){
+                                currentInputConnection?.commitText(clip.text,1)
+                                clipsOpen=false;draw()
+                            },LinearLayout.LayoutParams(0,d(44),1f))
+                            val menuButton=chip("⋮"){}
+                            row.addView(menuButton,LinearLayout.LayoutParams(d(43),d(44)))
+                            menuButton.setOnClickListener {
+                                PopupMenu(this,menuButton).apply {
+                                    menu.add("Copy").setOnMenuItemClickListener {
+                                        clipboard.setPrimaryClip(
+                                            ClipData.newPlainText("KeyPop clip",clip.text));true
+                                    }
+                                    menu.add(if(clip.pinned)"Unpin" else "Pin")
+                                        .setOnMenuItemClickListener {
+                                            clipExecutor.execute {
+                                                runCatching{clipStore.pin(clip.id,!clip.pinned)}
+                                                predictionHandler.post{if(clipsOpen)draw()}
+                                            };true
+                                        }
+                                    menu.add("Delete").setOnMenuItemClickListener {
+                                        clipExecutor.execute {
+                                            runCatching{clipStore.delete(clip.id)}
+                                            predictionHandler.post{if(clipsOpen)draw()}
+                                        };true
+                                    }
+                                    show()
+                                }
+                            }
+                            content.addView(row)
+                        }
+                        if(total>12) {
+                            val pages=LinearLayout(this).apply {
+                                orientation=LinearLayout.HORIZONTAL
+                            }
+                            if(page>0)pages.addView(chip("← Newer") {
+                                clipPage--;draw()
+                            },LinearLayout.LayoutParams(0,d(35),1f))
+                            if((page+1)*12<total)pages.addView(chip("Load more →") {
+                                clipPage++;draw()
+                            },LinearLayout.LayoutParams(0,d(35),1f))
+                            content.addView(pages)
+                        }
+                    }
+                }
+            }
+        }else{
+            imagePreviewExecutor.execute {
+                val result=runCatching{KeyPopImageStore(this).search("")}
+                predictionHandler.post {
+                    if(!clipsOpen || clipTab!=1 || generation!=clipPanelGeneration)return@post
+                    content.removeAllViews()
+                    result.onFailure {
+                        content.addView(text("Image history is unavailable. Nothing was deleted."))
+                    }.onSuccess { all->
+                        if(all.isEmpty()) {
+                            content.addView(text("No screenshots saved yet",15f))
+                            content.addView(text("Enable screenshot access or import an image.",12f))
+                            content.addView(chip("Enable screenshot detection"){
+                                startActivity(Intent(this,KeyPopScreenshotAccessActivity::class.java)
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                            },LinearLayout.LayoutParams(-1,d(38)))
+                        } else {
+                            content.addView(text(all.size.toString()+" saved screenshots",12f))
+                            for(image in all.take(8)) {
+                                val row=LinearLayout(this).apply {
+                                    orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL
+                                }
+                                val thumbnail=ImageView(this).apply {
+                                    contentDescription="Saved screenshot, tap to paste"
+                                    scaleType=ImageView.ScaleType.CENTER_CROP
+                                    setBackgroundColor(0xFF294D58.toInt())
+                                    setOnClickListener{pasteArchivedScreenshot(image)}
+                                }
+                                row.addView(thumbnail,LinearLayout.LayoutParams(d(55),d(49)))
+                                imagePreviewExecutor.execute {
+                                    val bitmap=runCatching{
+                                        KeyPopImageStore(this).thumbnail(image,112)
+                                    }.getOrNull()
+                                    if(bitmap!=null)predictionHandler.post{
+                                        if(thumbnail.isAttachedToWindow)thumbnail.setImageBitmap(bitmap)
+                                        else bitmap.recycle()
+                                    }
+                                }
+                                val caption=(if(image.pinned)"📌 " else "")+"Saved "+
+                                    java.text.DateFormat.getTimeInstance(
+                                        java.text.DateFormat.SHORT)
+                                        .format(java.util.Date(image.time))
+                                row.addView(chip(caption){pasteArchivedScreenshot(image)},
+                                    LinearLayout.LayoutParams(0,d(44),1f))
+                                val more=chip("⋮"){}
+                                row.addView(more,LinearLayout.LayoutParams(d(43),d(44)))
+                                more.setOnClickListener{
+                                    PopupMenu(this,more).apply {
+                                        menu.add("Paste").setOnMenuItemClickListener{
+                                            pasteArchivedScreenshot(image);true
+                                        }
+                                        menu.add("Share").setOnMenuItemClickListener{
+                                            shareArchivedScreenshot(image);true
+                                        }
+                                        menu.add(if(image.pinned)"Unpin" else "Pin")
+                                            .setOnMenuItemClickListener{
+                                                imagePreviewExecutor.execute{
+                                                    runCatching{
+                                                        KeyPopImageStore(this@AetherImeService).pin(image.id)
+                                                    }
+                                                    predictionHandler.post{if(clipsOpen)draw()}
+                                                };true
+                                            }
+                                        menu.add("Delete").setOnMenuItemClickListener{
+                                            imagePreviewExecutor.execute{
+                                                runCatching{
+                                                    KeyPopImageStore(this@AetherImeService).delete(image.id)
+                                                }
+                                                predictionHandler.post{if(clipsOpen)draw()}
+                                            };true
+                                        }
+                                        show()
+                                    }
+                                }
+                                content.addView(row,LinearLayout.LayoutParams(-1,d(54)))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    private fun pasteArchivedScreenshot(image:KeyPopImageClip) {
+        imagePreviewExecutor.execute{
+            val uri=runCatching{KeyPopImageStore(this).uriForShare(image)}.getOrNull()
+            predictionHandler.post {
+                if(uri==null) {
+                    Toast.makeText(this,"Screenshot unavailable",Toast.LENGTH_SHORT).show()
+                    return@post
+                }
+                val content=InputContentInfo(uri,
+                    ClipDescription("KeyPop screenshot",arrayOf(image.mime)),null)
+                val success=runCatching{
+                    currentInputConnection?.commitContent(content,
+                        InputConnection.INPUT_CONTENT_GRANT_READ_URI_PERMISSION,null)
+                }.getOrDefault(false)
+                if(success==true){clipsOpen=false;draw()}
+                else {
+                    clipboard.setPrimaryClip(ClipData.newUri(contentResolver,"KeyPop screenshot",uri))
+                    Toast.makeText(this,"Screenshot copied for pasting",
+                        Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+    private fun shareArchivedScreenshot(image:KeyPopImageClip) {
+        imagePreviewExecutor.execute {
+            val uri=runCatching{KeyPopImageStore(this).uriForShare(image)}.getOrNull()
+            predictionHandler.post {
+                if(uri==null)return@post
+                val share=Intent(Intent.ACTION_SEND).apply {
+                    type=image.mime;putExtra(Intent.EXTRA_STREAM,uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                startActivity(Intent.createChooser(share,"Share screenshot")
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            }
+        }
+    }
+
+}
