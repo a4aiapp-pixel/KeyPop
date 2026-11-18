@@ -145,7 +145,7 @@ jobs:
           for line in lines:
               if "certificate" not in line.lower():
                   continue
-              match = re.search(r"SHA[- ]?256\\s+digest\\s*:\\s*([0-9a-fA-F:\\s]+)", line, flags=re.I)
+              match = re.search(r"SHA[- ]?256\s+digest\s*:\s*([0-9a-fA-F:\s]+)", line, flags=re.I)
               if match:
                   value = re.sub(r"[^0-9a-fA-F]", "", match.group(1)).lower()
                   if len(value) == 64:
