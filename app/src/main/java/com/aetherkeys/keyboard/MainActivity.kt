@@ -200,7 +200,7 @@ class MainActivity : Activity() {
     private fun showExcludedAppsDialog() {
         val existing=prefs.getStringSet("adaptive_excluded_apps",emptySet()).orEmpty()
         val input=EditText(this).apply {
-            setText(existing.sorted().joinToString("\\n"))
+            setText(existing.sorted().joinToString("\n"))
             hint="com.example.app (one package per line)"
             minLines=4
         }
@@ -211,10 +211,10 @@ class MainActivity : Activity() {
             .setView(input)
             .setNegativeButton("Cancel",null)
             .setPositiveButton("Save"){ _,_ ->
-                val names=input.text.toString().split(',', '\\n', ';')
+                val names=input.text.toString().split(',', '\n', ';')
                     .map { it.trim() }.filter { it.isNotEmpty() }.toSet()
                 val valid=names.all {
-                    Regex("[A-Za-z][A-Za-z0-9_]*(\\\\.[A-Za-z][A-Za-z0-9_]*)+").matches(it)
+                    Regex("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+").matches(it)
                 }
                 if(valid) prefs.edit().putStringSet("adaptive_excluded_apps",names).apply()
                 else android.widget.Toast.makeText(this,"Invalid app package ID",android.widget.Toast.LENGTH_SHORT).show()
