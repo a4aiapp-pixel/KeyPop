@@ -165,6 +165,7 @@ class KeyPopLayoutStudioActivity:Activity() {
     }
     private fun edit(r:Int,c:Int,old:String) {
         val editor=EditText(this).apply {
+            KeyPopSelectionStyle.apply(this)
             setSingleLine(true);setText(old);setSelection(text.length)
         }
         AlertDialog.Builder(this).setTitle("Customize key")
