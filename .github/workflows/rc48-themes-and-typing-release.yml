@@ -153,6 +153,8 @@ jobs:
           assert 'Capitalize after sentences and line breaks' in settings
           assert 'autoCapSentences' in ime
           assert 'sentencesEnabled' in caps
+          # The first frame must visibly render the Shift key as active.
+          assert 'updateShiftKeys()\n    }\n    private fun addRow' in ime
           assert Path('app/src/test/java/com/aetherkeys/keyboard/KeyPopRC48InitialCapitalizationTest.kt').is_file()
           assert Path('app/src/androidTest/java/com/aetherkeys/keyboard/KeyPopRC48CapitalizationToggleInstrumentedTest.kt').is_file()
           assert Path('app/src/test/java/com/aetherkeys/keyboard/KeyPopRC47AutoCapitalizationTest.kt').is_file()
