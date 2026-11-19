@@ -129,6 +129,9 @@ class AetherImeService : InputMethodService() {
     private val languages=listOf("ENGLISH","اردو","سنڌي")
     private var language=0
     private var shift=false
+    // Automatic sentence capitals are separate from the user-controlled Shift key.
+    private var autoShiftVisual=false
+    private var autoCapSuppressed=false
     private var symbols=false
     private var clipsOpen=false
     private var toolsOpen=false
@@ -416,10 +419,12 @@ class AetherImeService : InputMethodService() {
         // press() already scheduled the prediction for our own edits.
         // Cursor moves, selections and external app edits need a fresh snapshot.
         if(!ourEdit) {
+            autoCapSuppressed=false
             latestSpaceAdvice=null
             requestSuggestionRefresh(18)
             scheduleLiveTranslation()
         }
+        updateShiftKeys()
     }
 
     override fun onFinishInputView(finishingInput:Boolean) {
@@ -469,7 +474,7 @@ class AetherImeService : InputMethodService() {
         clipsOpen=false;emojiOpen=false;cursorTools=false;translatorOpen=false;writingOpen=false
         googleEasyMode=false
         toolsOpen=false;resizeOpen=false
-        shift=false;capsLock=false
+        shift=false;capsLock=false;autoCapSuppressed=false
         val pending=pendingSpeech
         if(pending!=null && !sensitive(info) && info?.packageName==voiceTargetPackage) {
             val inserted=currentInputConnection?.commitText(pending,1) ?: false
@@ -936,6 +941,7 @@ class AetherImeService : InputMethodService() {
 
     private fun draw() {
         val root=current ?: return
+        refreshAutoShiftVisual()
         characterStrip?.dismiss()
         root.removeAllViews()
         screenshotSlot=null
@@ -1398,7 +1404,8 @@ class AetherImeService : InputMethodService() {
                 label=="↵" && mayTranslateOnSend() &&
                     !KeyPopEnterPolicy.insertsNewline(currentInputEditorInfo) &&
                     !sensitive(currentInputEditorInfo) -> "⇄ Send"
-                shift && (language==0 || prefs.getBoolean("romanMode",false)) &&
+                (shift || capsLock || autoShiftVisual) &&
+                    (language==0 || prefs.getBoolean("romanMode",false)) &&
                     label.length==1 && label[0].isLetter() -> label.uppercase(Locale.ROOT)
                 else -> label
             }
@@ -2209,14 +2216,28 @@ class AetherImeService : InputMethodService() {
         }
         probeSuggestions(bar,word)
     }
+    /** Auto-shift shows an upper-case keyboard before the first letter, without
+     * enabling Caps Lock or overriding a deliberate manual Shift-off. */
+    private fun shouldAutoCapitalize(prior:String?):Boolean {
+        val info=currentInputEditorInfo ?: return false
+        if(autoCapSuppressed || hasSelectedRange ||
+            (language!=0 && !prefs.getBoolean("romanMode",false))) return false
+        return KeyPopTypingRules.shouldAutoCapitalize(
+            info.inputType,prior,prefs.getBoolean("autoCap",true))
+    }
+    private fun refreshAutoShiftVisual() {
+        val prior=currentInputConnection?.let { readContext(it,120) }
+        autoShiftVisual=shouldAutoCapitalize(prior)
+    }
     /** Re-label only changed Latin keys instead of rebuilding the full IME. */
     private fun updateShiftKeys() {
+        refreshAutoShiftVisual()
         if(language!=0 && !prefs.getBoolean("romanMode",false))return
         for((key,raw) in keyViews) {
             if(raw.length!=1 || !raw[0].isLetter())continue
             val old=key.text.toString()
             val hint=if(old.contains('\n'))"\n"+old.substringAfter('\n') else ""
-            key.text=(if(shift||capsLock)raw.uppercase(Locale.ROOT)
+            key.text=(if(shift||capsLock||autoShiftVisual)raw.uppercase(Locale.ROOT)
                 else raw.lowercase(Locale.ROOT))+hint
         }
     }
@@ -2340,14 +2361,24 @@ class AetherImeService : InputMethodService() {
         when(value) {
             "⌫" -> {
                 deleteBackwardFromEditor()
+                autoCapSuppressed=false
+                updateShiftKeys()
                 requestSuggestionRefresh()
             }
             "⇧" -> {
                 if(language==0 || (prefs.getBoolean("romanMode",false) && language!=0)) {
                     val now=System.currentTimeMillis()
-                    if(now-lastShiftPress<420) { capsLock=!capsLock;shift=capsLock }
-                    else if(capsLock) {capsLock=false;shift=false}
-                    else shift=!shift
+                    if(now-lastShiftPress<420) {
+                        capsLock=!capsLock;shift=capsLock;autoCapSuppressed=false
+                    } else if(capsLock) {
+                        capsLock=false;shift=false
+                    } else if(autoShiftVisual && !shift) {
+                        // First Shift tap while auto-capitalized deliberately turns it off.
+                        autoCapSuppressed=true
+                    } else {
+                        shift=!shift
+                        if(shift)autoCapSuppressed=false
+                    }
                     lastShiftPress=now
                 }
                 updateShiftKeys()
@@ -2475,6 +2506,8 @@ class AetherImeService : InputMethodService() {
                 editorContext.committed(" ")
                 if(currentInputConnection?.commitText(" ",1)!=true)editorContext.clear()
                 latestSpaceAdvice=null
+                autoCapSuppressed=false
+                updateShiftKeys()
                 requestSuggestionRefresh()
             }
             "🌐" -> cycleLanguage()
@@ -2497,6 +2530,8 @@ class AetherImeService : InputMethodService() {
                     editorContext.committed("\n")
                     if(connection?.commitText("\n",1)!=true)
                         editorContext.clear()
+                    autoCapSuppressed=false
+                    updateShiftKeys()
                     requestSuggestionRefresh()
                 } else if(mayTranslateOnSend() &&
                     !sensitive(info) && !numeric(info)) {
@@ -2517,12 +2552,9 @@ class AetherImeService : InputMethodService() {
                 }
                 pendingSuggestionBoundary=null
                 val prior=connection?.let{readContext(it,120)}.orEmpty()
-                val sentenceStart=prior.isBlank() || prior.trimEnd().lastOrNull() in listOf('.','!','?','\n')
                 val latinMode=language==0 || prefs.getBoolean("romanMode",false)
                 val inputType=currentInputEditorInfo?.inputType?:0
-                val capital=shift || (latinMode && !sensitive(currentInputEditorInfo) &&
-                    KeyPopTypingRules.textAllowsAutomaticChanges(inputType) &&
-                    prefs.getBoolean("autoCap",true) && sentenceStart)
+                val capital=shift || capsLock || shouldAutoCapitalize(prior)
                 val variation=(currentInputEditorInfo?.inputType ?: 0) and
                     InputType.TYPE_MASK_VARIATION
                 val noAutoSpace=variation in setOf(InputType.TYPE_TEXT_VARIATION_URI,
@@ -2553,10 +2585,9 @@ class AetherImeService : InputMethodService() {
                 editorContext.committed(characters)
                 if(connection?.commitText(characters,1)!=true)
                     editorContext.clear()
-                if(shift && latinMode && !capsLock) {
-                    shift=false
-                    updateShiftKeys()
-                }
+                if(shift && latinMode && !capsLock)shift=false
+                if(value.length==1 && value[0].isLetter())autoCapSuppressed=false
+                updateShiftKeys()
                 requestSuggestionRefresh()
             }
         }
@@ -2569,7 +2600,7 @@ class AetherImeService : InputMethodService() {
     private fun cycleLanguage() {
         language=(language+1)%3
         prefs.edit().putInt("language",language).apply()
-        shift=false;capsLock=false;symbols=false;clipsOpen=false;emojiOpen=false;extended=false;draw()
+        shift=false;capsLock=false;autoCapSuppressed=false;symbols=false;clipsOpen=false;emojiOpen=false;extended=false;draw()
     }
     private fun showWritingPanel(root:LinearLayout) {
         val skin=palette()
