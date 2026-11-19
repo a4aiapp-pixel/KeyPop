@@ -402,10 +402,12 @@ class MainActivity:Activity() {
         val installed=runCatching {
             packageManager.getPackageInfo(packageName,0)
         }.getOrNull()
+        val installedCode=if(Build.VERSION.SDK_INT>=28)installed?.longVersionCode
+            else @Suppress("DEPRECATION") installed?.versionCode?.toLong()
         heading("KeyPop Settings")
         content.addView(text("Installed version: "+
             (installed?.versionName?:"Unavailable")+"  ·  Code "+
-            (installed?.longVersionCode?.toString()?:"Unknown"),12f,muted))
+            (installedCode?.toString()?:"Unknown"),12f,muted))
         addBlock {
             action(this,"Customize Keyboard","Theme, layout, size and suggestion strip") {
                 navigate("design")
