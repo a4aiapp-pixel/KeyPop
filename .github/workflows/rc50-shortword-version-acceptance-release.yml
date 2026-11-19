@@ -4,6 +4,7 @@ on:
     branches: [feature/rc50-version-label-shortword-quality-20261120]
     paths:
       - '.github/workflows/rc50-shortword-version-acceptance-release.yml'
+      - 'app/**'
   workflow_dispatch:
 permissions:
   contents: write
@@ -123,6 +124,8 @@ jobs:
           PY
             "$AAPT" dump badging "$APK" > /tmp/keypop-rc50-badging.txt
             grep -Fq "name='com.aetherkeys.keyboard.stablev2'" /tmp/keypop-rc50-badging.txt
+            grep -Fq "application-label:'KeyPop'" /tmp/keypop-rc50-badging.txt
+            grep -Eq "versionName='1\\.0\\.50-rc50-" /tmp/keypop-rc50-badging.txt
             python3 - <<'PY'
           import re
           s=open('/tmp/keypop-rc50-badging.txt').read()
@@ -203,6 +206,7 @@ jobs:
             adb shell pm path com.aetherkeys.keyboard.stablev2 | grep -q package:
             adb install -r dist/KeyPop-RC50-universal-signed.apk
             adb shell pm path com.aetherkeys.keyboard.stablev2 | grep -q package:
+            adb shell dumpsys package com.aetherkeys.keyboard.stablev2 | grep -q 'versionName=1.0.50-rc50-'
             adb shell am start -W -n com.aetherkeys.keyboard.stablev2/com.aetherkeys.keyboard.MainActivity -a android.intent.action.MAIN -c android.intent.category.LAUNCHER
             adb shell dumpsys activity activities | grep -E 'mResumedActivity|topResumedActivity|ResumedActivity' | grep -F 'com.aetherkeys.keyboard.MainActivity'
             adb install -r dist/KeyPop-RC50-x86_64-debug.apk
