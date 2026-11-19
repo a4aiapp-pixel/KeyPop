@@ -13,28 +13,31 @@ import kotlin.math.min
 data class KeyPopSkin(
     val name: String, val subtitle: String,
     val background: Int, val surface: Int, val key: Int, val accent: Int,
-    val ink: Int, val shape: Int, val outline: Boolean = false
+    val ink: Int, val shape: Int, val outline: Boolean = false,
+    val treatment:Int = 0, val font:String = "sans-serif-medium",
+    val lift:Int = 2, val gap:Int = 0
 )
 
 object KeyPopSkins {
     // Ten original styles and five familiar-layout-inspired styling profiles.
     // Inspired styles are not copies or endorsements of third party products.
+    // Index-stable migration; preserve existing Google/Microsoft/Samsung/AMOLED selections.
     val all = listOf(
-        KeyPopSkin("Nebula Prism", "Holographic", 0xFF080D26.toInt(), 0xFF201C53.toInt(), 0xFF37317A.toInt(), 0xFFB869FF.toInt(), Color.WHITE, 0),
-        KeyPopSkin("Arctic Glass", "Frosted light", 0xFFEAF5FF.toInt(), 0xFFC7E2EF.toInt(), 0xFFFFFFFF.toInt(), 0xFF1688B7.toInt(), 0xFF15354B.toInt(), 1),
-        KeyPopSkin("Cyber Pulse", "Electric grid", 0xFF05141A.toInt(), 0xFF053D46.toInt(), 0xFF0A3039.toInt(), 0xFF2EF9DD.toInt(), Color.WHITE, 2, true),
-        KeyPopSkin("Sunset Ember", "Warm glow", 0xFF301023.toInt(), 0xFF69213C.toInt(), 0xFF8C3458.toInt(), 0xFFFFAC52.toInt(), Color.WHITE, 3),
-        KeyPopSkin("Aurora Wave", "Northern lights", 0xFF071A27.toInt(), 0xFF16394D.toInt(), 0xFF14545E.toInt(), 0xFF68F0BB.toInt(), Color.WHITE, 0),
-        KeyPopSkin("Royal Obsidian", "Gold precision", 0xFF111216.toInt(), 0xFF303039.toInt(), 0xFF202027.toInt(), 0xFFF0C47C.toInt(), 0xFFFFF5D9.toInt(), 2, true),
-        KeyPopSkin("Orchid Bloom", "Soft lavender", 0xFF25162C.toInt(), 0xFF594165.toInt(), 0xFF674573.toInt(), 0xFFFF9BD7.toInt(), Color.WHITE, 1),
-        KeyPopSkin("Retro Pixel", "Arcade classic", 0xFF161D30.toInt(), 0xFF1E3654.toInt(), 0xFF30536C.toInt(), 0xFFF3DA62.toInt(), 0xFFFFFFFF.toInt(), 4, true),
-        KeyPopSkin("Zen Paper", "Quiet minimal", 0xFFF1F1ED.toInt(), 0xFFE5E7E3.toInt(), 0xFFFFFFFF.toInt(), 0xFF3B6F6A.toInt(), 0xFF263534.toInt(), 1),
-        KeyPopSkin("AMOLED Infinity", "Pure black", Color.BLACK, 0xFF11111A.toInt(), 0xFF20202D.toInt(), 0xFF9F86FF.toInt(), Color.WHITE, 2, true),
-        KeyPopSkin("Gboard-style · Material Teal Glass", "Dark teal high definition keycaps", 0xFF003D39.toInt(), 0xFF0B514A.toInt(), 0xFF29625F.toInt(), 0xFF079E91.toInt(), 0xFFF4FFFD.toInt(), 1),
-        KeyPopSkin("SwiftKey-style · Flow Crystal", "Deep blue luminous glass", 0xFF0E1E32.toInt(), 0xFF203E5A.toInt(), 0xFF3E607C.toInt(), 0xFF59C6FF.toInt(), Color.WHITE, 0),
-        KeyPopSkin("Samsung-style · One UI Glass", "Structured graphite glass keys", 0xFF151A22.toInt(), 0xFF293646.toInt(), 0xFF475769.toInt(), 0xFF9ED1FE.toInt(), Color.WHITE, 2),
-        KeyPopSkin("Speed Type", "Bold oversized", 0xFF101724.toInt(), 0xFF2B3651.toInt(), 0xFF465479.toInt(), 0xFFFE8E69.toInt(), Color.WHITE, 3),
-        KeyPopSkin("Airy Comfort", "Spacious daylight", 0xFFE9EEF5.toInt(), 0xFFCBD5E3.toInt(), 0xFFFFFFFF.toInt(), 0xFF6687CB.toInt(), 0xFF23344E.toInt(), 0)
+        KeyPopSkin("Liquid Titanium","Satin metal floating keys",0xFF101922.toInt(),0xFF273846.toInt(),0xFF41515D.toInt(),0xFF8AE4E0.toInt(),0xFFF4FAFC.toInt(),0,false,0,"sans-serif-medium",2,1),
+        KeyPopSkin("Crystal Frost","Luminous translucent glass",0xFFEAF5FA.toInt(),0xFFBFD8E8.toInt(),0xFFF9FEFF.toInt(),0xFF197EB4.toInt(),0xFF1C3A50.toInt(),1,true,1,"sans-serif-light",3,2),
+        KeyPopSkin("Obsidian Edge","Architectural graphite geometry",0xFF0B0E13.toInt(),0xFF181C26.toInt(),0xFF252B37.toInt(),0xFFB9E34E.toInt(),0xFFF3F5F7.toInt(),2,true,2,"sans-serif-medium",0,1),
+        KeyPopSkin("Neon Circuit","Electric precision grid",0xFF07121E.toInt(),0xFF101F30.toInt(),0xFF172B40.toInt(),0xFF33EAC4.toInt(),0xFFE8FFFC.toInt(),2,true,3,"sans-serif-condensed",1,1),
+        KeyPopSkin("Soft Clay","Warm sculpted tactile keys",0xFFF5E9DF.toInt(),0xFFE9D6C6.toInt(),0xFFFFF4E9.toInt(),0xFFB35C5E.toInt(),0xFF523C40.toInt(),0,false,4,"sans-serif",3,2),
+        KeyPopSkin("Editorial Cream","Elegant minimal typography",0xFFF7F4EC.toInt(),0xFFE9E4D9.toInt(),0xFFFEFDF8.toInt(),0xFF315F5A.toInt(),0xFF26332F.toInt(),2,false,5,"sans-serif",0,0),
+        KeyPopSkin("Iridescent Mesh","Violet and blue layered lighting",0xFF14112F.toInt(),0xFF382C6A.toInt(),0xFF4C4586.toInt(),0xFFE8B1FF.toInt(),0xFFFCF5FF.toInt(),0,false,6,"sans-serif-light",3,2),
+        KeyPopSkin("Carbon Pro","Precision textured carbon",0xFF121417.toInt(),0xFF262C32.toInt(),0xFF383E45.toInt(),0xFFFF846F.toInt(),0xFFF8FAFB.toInt(),2,true,7,"sans-serif-condensed",1,0),
+        KeyPopSkin("Sea Glass","Coastal jade fluid glass",0xFF073E43.toInt(),0xFF17676C.toInt(),0xFF318187.toInt(),0xFFB6FFDB.toInt(),0xFFFFFFFF.toInt(),1,false,8,"sans-serif-light",2,1),
+        KeyPopSkin("AMOLED Black","Pure black OLED",0xFF000000.toInt(),0xFF11111A.toInt(),0xFF20202D.toInt(),0xFF9F86FF.toInt(),0xFFFFFFFF.toInt(),2,true,9,"sans-serif-medium",0,0),
+        KeyPopSkin("Gboard-style · Material Teal Glass","Dark teal high definition keycaps",0xFF003D39.toInt(),0xFF0B514A.toInt(),0xFF29625F.toInt(),0xFF079E91.toInt(),0xFFF4FFFD.toInt(),1,false,10,"sans-serif-medium",0,0),
+        KeyPopSkin("SwiftKey-style · Flow Crystal","Deep blue luminous glass",0xFF0E1E32.toInt(),0xFF203E5A.toInt(),0xFF3E607C.toInt(),0xFF59C6FF.toInt(),0xFFFFFFFF.toInt(),0,false,11,"sans-serif-medium",2,0),
+        KeyPopSkin("Samsung-style · One UI Glass","Structured graphite glass keys",0xFF151A22.toInt(),0xFF293646.toInt(),0xFF475769.toInt(),0xFF9ED1FE.toInt(),0xFFFFFFFF.toInt(),2,false,12,"sans-serif-medium",2,0),
+        KeyPopSkin("Floating Islands","Separated elevated capsule keys",0xFFF2F4FA.toInt(),0xFFD8DFEE.toInt(),0xFFFFFFFF.toInt(),0xFF575AC3.toInt(),0xFF242A57.toInt(),0,false,13,"sans-serif",6,3),
+        KeyPopSkin("Ink Contrast","Strict monochrome flat geometry",0xFFF9F9F7.toInt(),0xFFE6E6E4.toInt(),0xFF202124.toInt(),0xFF545454.toInt(),0xFFFFFFFF.toInt(),2,false,14,"sans-serif-medium",0,0)
     )
     fun index(context: Context) = context.getSharedPreferences("keypop", Context.MODE_PRIVATE)
         .getInt("theme", 0).coerceIn(0, all.lastIndex)
@@ -50,13 +53,21 @@ object KeyPopSkins {
         val ink=if(luminance>0.45)Color.BLACK else Color.WHITE
         return themed.copy(ink=ink,outline=true)
     }
-    fun radius(skin: KeyPopSkin, user: Int): Float = when (skin.shape) {
-        0 -> user.toFloat() * 1.35f
-        1 -> user.toFloat()
-        2 -> min(6, user).toFloat()
-        3 -> min(10, user).toFloat()
-        else -> 1f
+    fun radius(skin: KeyPopSkin, user: Int): Float = when (skin.treatment) {
+        1,4 -> (user*1.5f).coerceIn(12f,31f)
+        2,3,7 -> (user*.55f).coerceIn(3f,10f)
+        5 -> (user*.35f).coerceIn(2f,6f)
+        6,8,13 -> (user*1.8f).coerceIn(16f,34f)
+        14 -> (user*.18f).coerceIn(1f,4f)
+        else -> when(skin.shape) {
+            0 -> user.toFloat()*1.35f
+            1 -> user.toFloat()
+            2 -> min(6,user).toFloat()
+            3 -> min(10,user).toFloat()
+            else -> 1f
+        }
     }
+
 }
 
 class KeyboardPreview(context: Context, initial: Int = 0): View(context) {
@@ -113,18 +124,13 @@ class KeyboardPreview(context: Context, initial: Int = 0): View(context) {
                 val x = side + j * (kw + gap)
                 val y = top + i * rowHeight
                 val rect = RectF(x, y, x + kw, y + rowHeight - gap)
-                paint.color = s.key
-                paint.style = Paint.Style.FILL
-                val round=KeyPopSkins.radius(s,context.getSharedPreferences("keypop",Context.MODE_PRIVATE).getInt("round",13))
-                canvas.drawRoundRect(rect,dp(round),dp(round),paint)
-                if (s.outline) {
-                    paint.color = s.accent
-                    paint.strokeWidth = dp(0.7f)
-                    paint.style = Paint.Style.STROKE
-                    canvas.drawRoundRect(rect, dp(5f), dp(5f), paint)
-                    paint.style = Paint.Style.FILL
-                }
+                // Actual runtime keycap renderer, so previews cannot misrepresent a theme.
+                KeyPopGlass.key(context,s,false,selection).apply {
+                    setBounds(rect.left.toInt(),rect.top.toInt(),rect.right.toInt(),rect.bottom.toInt())
+                }.draw(canvas)
+                paint.style=Paint.Style.FILL
                 paint.color = s.ink
+                paint.typeface=android.graphics.Typeface.create(s.font,android.graphics.Typeface.NORMAL)
                 paint.textAlign = Paint.Align.CENTER
                 paint.textSize = dp(10f)
                 canvas.drawText(row[j].toString(), x + kw / 2, y + (rowHeight - gap) * .64f, paint)
@@ -151,97 +157,69 @@ class KeyPopBackdropDrawable(private val index:Int,private val skin:KeyPopSkin):
         canvas.save()
         canvas.translate(rect.left.toFloat(),rect.top.toFloat())
         p.style=Paint.Style.FILL
-        p.shader=LinearGradient(0f,0f,w,h,skin.background,skin.surface,Shader.TileMode.CLAMP)
-        canvas.drawRect(0f,0f,w,h,p);p.shader=null
+        if(index==9 || index==14) {
+            p.color=skin.background;canvas.drawRect(0f,0f,w,h,p)
+        } else {
+            p.shader=LinearGradient(0f,0f,w,h,skin.background,skin.surface,Shader.TileMode.CLAMP)
+            canvas.drawRect(0f,0f,w,h,p);p.shader=null
+        }
         val accent=skin.accent
         when(index) {
-            10 -> {
-                p.shader=android.graphics.RadialGradient(w*.5f,0f,h*1.3f,
-                    intArrayOf(alpha(0xFF5DE7D3.toInt(),45),alpha(accent,0)),
-                    null,Shader.TileMode.CLAMP)
+            0 -> {
+                p.style=Paint.Style.STROKE;p.strokeWidth=1.2f;p.color=alpha(accent,26)
+                for(i in 0..16){val x=i*w/16f;canvas.drawLine(x,0f,x+w*.12f,h,p)}
+                p.style=Paint.Style.FILL
+            }
+            1 -> {
+                p.shader=android.graphics.RadialGradient(w*.8f,0f,h*.9f,
+                    intArrayOf(alpha(Color.WHITE,150),alpha(Color.WHITE,0)),null,Shader.TileMode.CLAMP)
                 canvas.drawRect(0f,0f,w,h,p);p.shader=null
-                p.style=Paint.Style.STROKE;p.strokeWidth=1.5f
-                p.color=alpha(0xFFB8FFF0.toInt(),35)
-                canvas.drawLine(0f,1f,w,1f,p)
-                p.style=Paint.Style.FILL
             }
-            0,9 -> { // Nebula and AMOLED cosmic stars
-                for(i in 0..24) {
-                    val x=((i*97)%101)/101f*w
-                    val y=((i*41+9)%87)/87f*h
-                    p.color=alpha(accent,(if(index==9)45 else 70)+(wave()*40).toInt())
-                    canvas.drawCircle(x,y,if(i%5==0)3.2f else 1.3f,p)
-                }
-                p.style=Paint.Style.STROKE;p.strokeWidth=3f
-                p.color=alpha(accent,125)
-                canvas.drawRoundRect(5f,5f,w-5f,h-5f,20f,20f,p)
-                p.style=Paint.Style.FILL
-            }
-            1,8,14 -> { // translucent frost/paper geometries
-                p.color=alpha(accent,18)
-                for(i in 0..10) {
-                    val x=i*w/10f
-                    canvas.drawRoundRect(x-16f,0f,x+14f,h,7f,7f,p)
-                }
-                p.color=alpha(accent,26)
-                canvas.drawCircle(w*.83f,h*.13f,h*.42f,p)
-            }
-            2,12 -> { // cyber matrix
+            2,5 -> {
                 p.style=Paint.Style.STROKE;p.strokeWidth=1f
-                p.color=alpha(accent,if(index==2)65 else 28)
-                val spacing=if(index==2)23f else 15f
-                var x=0f
-                while(x<w){canvas.drawLine(x,0f,x,h,p);x+=spacing}
-                var y=0f
-                while(y<h){canvas.drawLine(0f,y,w,y,p);y+=spacing}
+                p.color=alpha(accent,35);canvas.drawLine(0f,2f,w,2f,p)
                 p.style=Paint.Style.FILL
             }
-            3,6 -> { // warm glow / orchid bloom
-                p.shader=android.graphics.RadialGradient(w*.78f,h*.12f,h*.8f,
-                    intArrayOf(alpha(accent,98),alpha(accent,0)),null,Shader.TileMode.CLAMP)
+            3 -> {
+                p.style=Paint.Style.STROKE;p.strokeWidth=1f;p.color=alpha(accent,32)
+                for(i in 0..16){val x=i*w/16f;canvas.drawLine(x,0f,x,h,p)}
+                for(i in 0..8){val y=i*h/8f;canvas.drawLine(0f,y,w,y,p)}
+                p.style=Paint.Style.FILL
+            }
+            4,13 -> {
+                p.shader=android.graphics.RadialGradient(w*.22f,0f,h*.94f,
+                    intArrayOf(alpha(Color.WHITE,140),alpha(Color.WHITE,0)),null,Shader.TileMode.CLAMP)
                 canvas.drawRect(0f,0f,w,h,p);p.shader=null
-                p.style=Paint.Style.STROKE;p.color=alpha(accent,65);p.strokeWidth=3f
-                for(i in 0..3) canvas.drawCircle(w*.72f,h*.3f,30f+i*26f,p)
+            }
+            6 -> {
+                p.shader=android.graphics.RadialGradient(w*.8f,h*.17f,h*.94f,
+                    intArrayOf(alpha(0xFFC37AFF.toInt(),90),alpha(accent,0)),null,Shader.TileMode.CLAMP)
+                canvas.drawRect(0f,0f,w,h,p);p.shader=null
+            }
+            7 -> {
+                p.style=Paint.Style.STROKE;p.strokeWidth=1f;p.color=alpha(Color.WHITE,14)
+                for(i in 0..28){val x=i*w/28f;canvas.drawLine(x,0f,x+w*.12f,h,p)}
                 p.style=Paint.Style.FILL
             }
-            4,11 -> { // aurora motion motifs, static and light
-                p.style=Paint.Style.STROKE;p.strokeWidth=4f
-                for(i in 0..3) {
-                    p.color=alpha(accent,20+i*12+(wave()*18).toInt())
+            8,11 -> {
+                p.style=Paint.Style.STROKE;p.strokeWidth=5f
+                for(i in 0..2) {
+                    p.color=alpha(accent,14+i*10)
                     val path=android.graphics.Path().apply {
-                        moveTo(-20f,h*(.23f+i*.16f))
-                        cubicTo(w*.32f,h*(.13f+i*.16f),w*.61f,h*(.52f+i*.06f),w+20f,h*(.23f+i*.12f))
+                        moveTo(-20f,h*(.2f+i*.24f))
+                        cubicTo(w*.3f,h*(.1f+i*.22f),w*.72f,h*(.4f+i*.1f),
+                            w+20f,h*(.2f+i*.16f))
                     }
                     canvas.drawPath(path,p)
                 }
                 p.style=Paint.Style.FILL
             }
-            5 -> { // gold precision
-                p.style=Paint.Style.STROKE;p.color=alpha(accent,85);p.strokeWidth=2f
-                canvas.drawRoundRect(6f,6f,w-6f,h-6f,7f,7f,p)
-                canvas.drawLine(w*.78f,5f,w*.95f,h*.22f,p)
-                canvas.drawLine(w*.05f,h*.8f,w*.22f,h-5f,p)
-                p.style=Paint.Style.FILL
+            9 -> Unit // Preserve true-black OLED: no dots, grid or bloom
+            10 -> {
+                p.color=alpha(0xFFB8FFF0.toInt(),27)
+                canvas.drawRect(0f,0f,w,1.5f,p)
             }
-            7 -> { // retro pixels
-                p.color=alpha(accent,55)
-                for(i in 0..12) for(j in 0..7) {
-                    if((i*3+j*7)%5==0) {
-                        val x=i*w/13f;val y=j*h/8f
-                        canvas.drawRect(x,y,x+7f,y+7f,p)
-                    }
-                }
-            }
-            13 -> { // speed lines
-                p.style=Paint.Style.STROKE;p.strokeWidth=3.5f
-                p.color=alpha(accent,52)
-                for(i in 0..8) {
-                    val x=i*w/8f
-                    canvas.drawLine(x,-5f,x+w*.13f,h+5f,p)
-                }
-                p.style=Paint.Style.FILL
-            }
-            else -> {}
+            12,14 -> Unit
         }
         canvas.restore()
     }
