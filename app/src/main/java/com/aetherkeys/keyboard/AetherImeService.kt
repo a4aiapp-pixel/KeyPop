@@ -65,7 +65,8 @@ class AetherImeService : InputMethodService() {
         if(inputViewActive && suggestionBar!=null) {
             when {
                 key=="suggestions" || key=="alwaysShowToolbar" || key=="predictNext" ||
-                    key=="contextPredictions" || key=="aggressivePredictions" ||
+                    key=="contextPredictions" || key=="enhancedContextPredictions" ||
+                    key=="aggressivePredictions" ||
                     key=="grammarHints" -> {
                     cancelSuggestionWork()
                     refreshSuggestions()
@@ -2011,7 +2012,9 @@ class AetherImeService : InputMethodService() {
                         .getOrDefault(emptyMap()) else emptyMap()
                 val safeSpelling=spelling?.takeUnless{(feedback[it]?:0)>=2}
                 val values=KeyPopUnifiedPrediction.rank(predLang,word,before,
-                    personal,dictionary,safeSpelling,feedback,8)
+                    personal,dictionary,safeSpelling,feedback,8,
+                    enhancedContext=useContext &&
+                        prefs.getBoolean("enhancedContextPredictions",true))
                 val grammar=if(word.isNotEmpty() && !privateMode && showGrammar)
                     KeyPopGrammarRules.suggest(before,predLang) else null
                 KeyPopDiagnostics.observePredictionCompute(this,
