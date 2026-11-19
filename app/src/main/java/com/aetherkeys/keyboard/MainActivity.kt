@@ -860,6 +860,11 @@ class MainActivity:Activity() {
             action(this,"Suggestion strip settings"){navigate("designSuggestions")}
             option(this,"Aggressive predictions","aggressivePredictions",true)
             option(this,"Predict next word","predictNext",true)
+            option(this,"Enhanced contextual prediction (offline)",
+                "enhancedContextPredictions",true)
+            addView(text("Ranks suggestions by the preceding words, likely " +
+                "continuations and conservative English grammar rules. " +
+                "All processing stays on your device.",12f,muted))
             option(this,"Learn my words on this device","learningEnabled",true)
             option(this,"Learn my sentence patterns privately","personalHistoryLearning",true)
             action(this,"RC42 Adaptive Intelligence & memory controls",
