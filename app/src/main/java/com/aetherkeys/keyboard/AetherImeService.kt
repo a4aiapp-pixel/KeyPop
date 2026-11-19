@@ -64,6 +64,10 @@ class AetherImeService : InputMethodService() {
     private val suggestionPrefsListener=SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if(inputViewActive && suggestionBar!=null) {
             when {
+                key=="autoCap" -> {
+                    updateShiftKeys()
+                    requestSuggestionRefresh()
+                }
                 key=="suggestions" || key=="alwaysShowToolbar" || key=="predictNext" ||
                     key=="contextPredictions" || key=="enhancedContextPredictions" ||
                     key=="aggressivePredictions" ||
@@ -2226,10 +2230,15 @@ class AetherImeService : InputMethodService() {
         if(autoCapSuppressed || hasSelectedRange ||
             (language!=0 && !prefs.getBoolean("romanMode",false)))return false
         return KeyPopTypingRules.shouldAutoCapitalize(
-            info.inputType,prior,prefs.getBoolean("autoCap",true))
+            info.inputType,prior,prefs.getBoolean("autoCap",true),
+            info.initialSelStart,info.initialSelEnd)
     }
     private fun refreshAutoShiftVisual() {
-        val prior=currentInputConnection?.let{readContext(it,120)}
+        // Preserve null when the editor has not returned a snapshot. We can
+        // use EditorInfo's confirmed zero selection for first focus instead.
+        val prior=currentInputConnection?.let{input->
+            if(sensitive(currentInputEditorInfo))null else readMirroredContext(input,120)
+        }
         autoShiftVisual=shouldAutoCapitalize(prior)
     }
     /** Re-label only changed Latin keys instead of rebuilding the full IME. */
@@ -2237,6 +2246,12 @@ class AetherImeService : InputMethodService() {
         refreshAutoShiftVisual()
         if(language!=0 && !prefs.getBoolean("romanMode",false))return
         for((key,raw) in keyViews) {
+            if(raw=="⇧") {
+                val autoOn=shift||capsLock||autoShiftVisual
+                key.isActivated=autoOn
+                key.setTextColor(if(autoOn)palette().accent else Color.WHITE)
+                continue
+            }
             if(raw.length!=1 || !raw[0].isLetter())continue
             val old=key.text.toString()
             val hint=if(old.contains('\n'))"\n"+old.substringAfter('\n') else ""
@@ -2554,10 +2569,14 @@ class AetherImeService : InputMethodService() {
                         SystemClock.elapsedRealtime()-it.acceptedAtMs<=5000L
                 }
                 pendingSuggestionBoundary=null
-                val prior=connection?.let{readContext(it,120)}.orEmpty()
+                val priorSnapshot=connection?.let{input->
+                    if(sensitive(currentInputEditorInfo))null else
+                        readMirroredContext(input,120)
+                }
+                val prior=priorSnapshot.orEmpty()
                 val latinMode=language==0 || prefs.getBoolean("romanMode",false)
                 val inputType=currentInputEditorInfo?.inputType?:0
-                val capital=shift || capsLock || shouldAutoCapitalize(prior)
+                val capital=shift || capsLock || shouldAutoCapitalize(priorSnapshot)
                 val variation=(currentInputEditorInfo?.inputType ?: 0) and
                     InputType.TYPE_MASK_VARIATION
                 val noAutoSpace=variation in setOf(InputType.TYPE_TEXT_VARIATION_URI,
