@@ -45,10 +45,17 @@ object KeyPopTypingRules {
      * selection positions are confirmed zero; never guess for existing text.
      */
     fun shouldAutoCapitalize(inputType:Int,before:String?,enabled:Boolean,
-                             initialSelStart:Int=-1,initialSelEnd:Int=-1):Boolean {
-        if(!enabled || !textAllowsCapitalization(inputType))return false
-        if(before==null)return initialSelStart==0 && initialSelEnd==0
-        return KeyPopPredictionContext.startsSentence(before)
+                             initialSelStart:Int=-1,initialSelEnd:Int=-1,
+                             sentencesEnabled:Boolean=enabled):Boolean {
+        if(!textAllowsCapitalization(inputType))return false
+        // Newly focused fields may not yet supply a readable text snapshot.
+        // Only a verified cursor at zero permits the first-letter fallback.
+        if(before==null)return enabled && initialSelStart==0 && initialSelEnd==0
+        val context=before.trimEnd { it==' ' || it=='\t' || it=='\r' }
+        if(context.isEmpty())return enabled
+        if(context.last()=='\n')
+            return sentencesEnabled || (enabled && context.all(Char::isWhitespace))
+        return sentencesEnabled && context.last() in setOf('.','!','?','؟','۔')
     }
 
     fun textAllowsSuggestions(inputType:Int,imeOptions:Int=0):Boolean {
