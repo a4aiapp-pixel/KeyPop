@@ -72,6 +72,7 @@ class KeyPopDictionaryActivity:Activity() {
         add(toggle,15)
         add(label("ADD A WORD",12f,accent),2)
         val entry=EditText(this).apply{
+            KeyPopSelectionStyle.apply(this)
             hint="Type a word for "+KeyPopLayouts.languages[language]
             textSize=15f;setTextColor(white);setHintTextColor(dim)
             setSingleLine(true);background=background(0xFF24304C.toInt())
@@ -85,6 +86,7 @@ class KeyPopDictionaryActivity:Activity() {
         },15)
         add(label("YOUR SAVED WORDS",12f,accent),4)
         val search=EditText(this).apply {
+            KeyPopSelectionStyle.apply(this)
             hint="Search this dictionary…";setSingleLine(true)
             textSize=14f;setTextColor(white);setHintTextColor(dim)
             background=background(0xFF24304C.toInt())
