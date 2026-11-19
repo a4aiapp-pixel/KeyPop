@@ -214,8 +214,8 @@ class KeyPopLexicon(context:Context) {
     /** Do not split known dictionary words or explicit personal names.
      * Only an unambiguous two-word segmentation may be autocorrected. */
     private fun isKnownEnglish(word:String):Boolean =
-        word in english || word in KeyPopTypingIntelligence.list(0) ||
-        word=="predict" || (scowlReady &&
+        word in english || KeyPopCompletionLexicon.contains(word) ||
+        word in KeyPopTypingIntelligence.list(0) || word=="predict" || (scowlReady &&
             scowlIndex[word.take(2)].orEmpty().any{it.word==word})
 
     fun joinedWordCorrection(lang:Int,typed:String,allowPersonal:Boolean=true):String? {
@@ -237,7 +237,9 @@ class KeyPopLexicon(context:Context) {
         // remain the primary source; select only relevant learned entries.
         val relevantLearned=if(prefix.isBlank())emptySet() else
             learned.asSequence().filter {it.startsWith(prefix)}.take(128).toSet()
-        val dictionary=base.toList()+familiar.map {it.word}
+        val dictionary=base.toList()+
+            (if(lang==0)KeyPopCompletionLexicon.candidates(fragment,32) else emptyList())+
+            familiar.map {it.word}
         val tiers=if(lang==0)familiar.associate {it.word to it.tier} else emptyMap()
         val normalized=fragment.trim().lowercase(Locale.ROOT)
         val originalKnown=lang==0 && isKnownEnglish(normalized)
