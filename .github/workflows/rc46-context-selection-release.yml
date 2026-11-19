@@ -39,6 +39,16 @@ jobs:
               assert item in src,item
           assert 'KeyPopGrammarAgreement' in open('app/src/main/java/com/aetherkeys/keyboard/KeyPopUnifiedPrediction.kt').read()
           assert 'KeyPopSelectionStyle' in open('app/src/main/java/com/aetherkeys/keyboard/MainActivity.kt').read()
+          # Verify that every explicit emulator test suite exists before a costly build.
+          import pathlib,re
+          workflow=pathlib.Path('.github/workflows/rc46-context-selection-release.yml').read_text()
+          suites=re.search(r'adb shell am instrument[^\n]*\s-e class\s+([\w.,]+)\s+', workflow)
+          assert suites, 'Missing instrumentation suites declaration'
+          for qualified in suites.group(1).split(','):
+              class_name=qualified.rsplit('.',1)[-1]
+              src=pathlib.Path('app/src/androidTest/java/com/aetherkeys/keyboard')/(class_name+'.kt')
+              assert src.is_file(), f'Instrumentation class file missing: {qualified}'
+              assert re.search(r'\bclass\s+'+re.escape(class_name)+r'\b',src.read_text()), f'Instrumentation class declaration missing: {qualified}'
           print('PASS: full settings, contextual ranker, selection styling')
           PY
       - name: Configure immutable RC42-RC45 signing key
@@ -177,7 +187,7 @@ jobs:
             adb shell dumpsys activity activities | grep -E 'mResumedActivity|topResumedActivity|ResumedActivity' | grep -F 'com.aetherkeys.keyboard.MainActivity'
             adb install -r dist/KeyPop-RC46-x86_64-debug.apk
             adb install -r dist/KeyPop-RC46-androidTest.apk
-            adb shell am instrument -w -r -e class com.aetherkeys.keyboard.KeyPopRuntimeSmokeTest,com.aetherkeys.keyboard.KeyPopRC40WhatsAppEnterInstrumentedTest,com.aetherkeys.keyboard.KeyPopRC42UrlEditingInstrumentedTest,com.aetherkeys.keyboard.KeyPopRC45PrivateAutofillInstrumentedTest com.aetherkeys.keyboard.rc46preview.test/androidx.test.runner.AndroidJUnitRunner | tee /tmp/keypop-rc46-instrumentation.txt
+            adb shell am instrument -w -r -e class com.aetherkeys.keyboard.KeyPopRuntimeSmokeTest,com.aetherkeys.keyboard.KeyPopRC40WhatsAppEnterInstrumentedTest,com.aetherkeys.keyboard.KeyPopRC42UrlEditingInstrumentedTest,com.aetherkeys.keyboard.KeyPopRC44PrivateAutofillInstrumentedTest com.aetherkeys.keyboard.rc46preview.test/androidx.test.runner.AndroidJUnitRunner | tee /tmp/keypop-rc46-instrumentation.txt
             grep -E 'OK [(][0-9]+ tests?[)]' /tmp/keypop-rc46-instrumentation.txt
             ! grep -Eq 'FAILURES!!!|INSTRUMENTATION_FAILED|Process crashed' /tmp/keypop-rc46-instrumentation.txt
 
