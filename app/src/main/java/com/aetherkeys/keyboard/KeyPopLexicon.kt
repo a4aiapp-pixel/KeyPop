@@ -265,7 +265,10 @@ class KeyPopLexicon(context:Context) {
         val ordered=if(exact.isNotEmpty())
             exact.take(2)+fuzzy.take(3)+completions
             else fuzzy.take(3)+completions
-        return (listOfNotNull(if(lang==0)digitSlipCorrection(fragment) else null)+
+        return ((if(lang==0)
+                KeyPopShortWordRecovery.suggestions(fragment,beforeCursor,4)
+            else emptyList())+
+            listOfNotNull(if(lang==0)digitSlipCorrection(fragment) else null)+
             listOfNotNull(joinedWordCorrection(lang,fragment,allowPersonal))+
             listOfNotNull(KeyPopTypingIntelligence.correction(lang,fragment))+
             ordered).distinct().filter{it!=normalized}
@@ -279,19 +282,23 @@ class KeyPopLexicon(context:Context) {
      * Spacebar fast path: only constant-time verified substitutions. The full
      * SCOWL edit-distance ranking runs on the prediction worker, never here.
      */
-    fun fastCorrection(lang:Int,word:String):String? {
+    fun fastCorrection(lang:Int,word:String,beforeCursor:String=""):String? {
         if(lang!=0)return null
         val normalized=word.lowercase(Locale.ROOT)
         if(normalized in store.getStringSet("manual_0",emptySet()).orEmpty())return null
-        return digitSlipCorrection(normalized) ?:if(normalized=="topredict")"to predict"
+        return KeyPopShortWordRecovery.safeAutomatic(normalized,beforeCursor)
+            ?: digitSlipCorrection(normalized)
+            ?:if(normalized=="topredict")"to predict"
             else KeyPopTypingIntelligence.correction(lang,normalized)
     }
     /** The suggestion chip may offer an ambiguous candidate that would be
      * too risky to insert automatically; the Space auto-fix gate is separate. */
     fun suggestedCorrection(lang:Int,word:String,beforeCursor:String=""):String? {
         val normalized=word.trim().lowercase(Locale.ROOT)
-        if(lang!=0 || normalized.length !in 3..22)return null
+        if(lang!=0 || normalized.length !in 2..22)return null
         if(normalized in store.getStringSet("manual_0",emptySet()).orEmpty())return null
+        KeyPopShortWordRecovery.suggestions(normalized,beforeCursor).firstOrNull()
+            ?.let{return it}
         digitSlipCorrection(normalized)?.let{return it}
         if(isKnownEnglish(normalized))return null
         joinedWordCorrection(lang,normalized)?.let{return it}
@@ -307,6 +314,8 @@ class KeyPopLexicon(context:Context) {
             return null
         val base=when(lang){1->urdu;2->sindhi;else->english}
         if(normalized in base)return null
+        if(lang==0)KeyPopShortWordRecovery.safeAutomatic(normalized,beforeCursor)
+            ?.let{return it}
         if(lang==0)digitSlipCorrection(normalized)?.let{return it}
         joinedWordCorrection(lang,word,allowPersonal)?.let{return it}
         val learned=if(allowPersonal)store.getStringSet("learned_"+lang,emptySet()).orEmpty()
