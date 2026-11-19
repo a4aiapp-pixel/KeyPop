@@ -52,7 +52,7 @@ class KeyPopRC49PersonalLearningInstrumentedTest {
         try {
             repeat(3){model.observe(0,"I ","am")}
             assertEquals("am",model.candidates(0,"I ","",5).first())
-            assertTrue(model.canLearn("Prior text\\nI am ","working"))
+            assertTrue(model.canLearn("Prior text\nI am ","working"))
             assertFalse(model.canLearn("Somebody@example.com ","name"))
             assertFalse(model.canLearn("My account 012345 ","number"))
             val newModel=KeyPopPersonalLanguageModel(context)
