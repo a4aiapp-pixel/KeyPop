@@ -403,7 +403,7 @@ class MainActivity:Activity() {
             packageManager.getPackageInfo(packageName,0)
         }.getOrNull()
         val installedCode=if(Build.VERSION.SDK_INT>=28)installed?.longVersionCode
-            else @Suppress("DEPRECATION") installed?.versionCode?.toLong()
+            else installed?.versionCode?.toLong()
         heading("KeyPop Settings")
         content.addView(text("Installed version: "+
             (installed?.versionName?:"Unavailable")+"  ·  Code "+
