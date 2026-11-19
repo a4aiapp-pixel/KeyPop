@@ -1,0 +1,228 @@
+name: KeyPop RC50 corrected installed identity and short-word spelling signed APKs
+on:
+  push:
+    branches: [feature/rc50-version-label-shortword-quality-20261120]
+    paths:
+      - '.github/workflows/rc50-shortword-version-acceptance-release.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: rc50-shortword-identity-signed
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    env:
+      KEYPOP_SIGNING_BOOTSTRAP_ENV: ${{ secrets.KEYPOP_SIGNING_BOOTSTRAP_ENV }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify launcher is complete settings, not setup
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          r=ET.parse('app/src/main/AndroidManifest.xml').getroot()
+          ns='{http://schemas.android.com/apk/res/android}'
+          app=r.find('application')
+          launches=[]
+          for activity in app.findall('activity'):
+              for filt in activity.findall('intent-filter'):
+                  actions=[x.get(ns+'name') for x in filt.findall('action')]
+                  cats=[x.get(ns+'name') for x in filt.findall('category')]
+                  if 'android.intent.action.MAIN' in actions and 'android.intent.category.LAUNCHER' in cats:
+                      launches.append(activity.get(ns+'name'))
+          assert launches==['.MainActivity'],f'Unexpected launch activities: {launches}'
+          src=open('app/src/main/java/com/aetherkeys/keyboard/MainActivity.kt').read()
+          for item in ['Customize Keyboard','Typing','Clipboard & Security','Translation','Design Backup','Saved form data & profiles']:
+              assert item in src,item
+          assert 'KeyPopGrammarAgreement' in open('app/src/main/java/com/aetherkeys/keyboard/KeyPopUnifiedPrediction.kt').read()
+          assert 'KeyPopSelectionStyle' in open('app/src/main/java/com/aetherkeys/keyboard/MainActivity.kt').read()
+          # Verify that every explicit emulator test suite exists before a costly build.
+          import pathlib,re
+          workflow=pathlib.Path('.github/workflows/rc50-shortword-version-acceptance-release.yml').read_text()
+          suites=re.search(r'adb shell am instrument[^\n]*\s-e class\s+([\w.,]+)\s+', workflow)
+          assert suites, 'Missing instrumentation suites declaration'
+          for qualified in suites.group(1).split(','):
+              class_name=qualified.rsplit('.',1)[-1]
+              src=pathlib.Path('app/src/androidTest/java/com/aetherkeys/keyboard')/(class_name+'.kt')
+              assert src.is_file(), f'Instrumentation class file missing: {qualified}'
+              assert re.search(r'\bclass\s+'+re.escape(class_name)+r'\b',src.read_text()), f'Instrumentation class declaration missing: {qualified}'
+          print('PASS: full settings, contextual ranker, selection styling')
+          PY
+      - name: Configure immutable RC42-RC45 signing key
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$KEYPOP_SIGNING_BOOTSTRAP_ENV"
+          python3 - <<'PY'
+          import os,base64,pathlib,re
+          data=os.environ['KEYPOP_SIGNING_BOOTSTRAP_ENV']
+          keys=['KEYPOP_SIGNING_KEYSTORE_B64','KEYPOP_SIGNING_STORE_PASSWORD','KEYPOP_SIGNING_KEY_ALIAS','KEYPOP_SIGNING_KEY_PASSWORD']
+          fields={}
+          for line in data.splitlines():
+              if not line.strip():continue
+              k,sep,v=line.partition('=')
+              if not sep or k not in keys or k in fields or not v:raise SystemExit('Invalid signing format')
+              fields[k]=v
+          if set(fields)!=set(keys):raise SystemExit('Missing signing material')
+          p=pathlib.Path(os.environ['RUNNER_TEMP'])/'keypop-permanent.jks'
+          p.write_bytes(base64.b64decode(fields.pop('KEYPOP_SIGNING_KEYSTORE_B64'),validate=True))
+          p.chmod(0o600)
+          with open(os.environ['GITHUB_ENV'],'a') as f:
+              f.write('KEYPOP_SIGNING_KEYSTORE_PATH='+str(p)+'\n')
+              for k,v in fields.items():
+                  if not re.fullmatch('[A-Za-z0-9_-]{8,128}',v):raise SystemExit('Invalid secret field')
+                  print('::add-mask::'+v)
+                  f.write(k+'='+v+'\n')
+          PY
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - name: Install Android 36 platform
+        run: |
+          set -euo pipefail
+          SDKMANAGER="$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools" -type f -name sdkmanager | sort -V | tail -1)"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" 'platforms;android-36' 'build-tools;36.0.0'
+      - name: Unit tests, lint, debug instrumentation APK and signed release variants
+        run: gradle --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest :app:assembleRelease
+      - name: Verify release signature and package
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          APKSIGNER="$(find "$SDK/build-tools" -mindepth 2 -maxdepth 2 -name apksigner | sort -V | tail -1)"
+          AAPT="$(find "$SDK/build-tools" -mindepth 2 -maxdepth 2 -name aapt | sort -V | tail -1)"
+          mkdir -p dist
+          cp app/build/outputs/apk/release/app-arm64-v8a-release.apk dist/KeyPop-RC50-arm64-v8a-signed.apk
+          cp app/build/outputs/apk/release/app-universal-release.apk dist/KeyPop-RC50-universal-signed.apk
+          cp app/build/outputs/apk/debug/app-x86_64-debug.apk dist/KeyPop-RC50-x86_64-debug.apk
+          cp app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk dist/KeyPop-RC50-androidTest.apk
+          for APK in dist/*-signed.apk; do
+            "$APKSIGNER" verify "$APK"
+            python3 - "$APKSIGNER" "$APK" <<'PY'
+          import os,re,subprocess,sys
+          a,p=sys.argv[1:]
+          lines=subprocess.check_output([a,'verify','--print-certs',p],text=True).splitlines()
+          digests=[]
+          for line in lines:
+              if 'certificate' not in line.lower():continue
+              m=re.search(r'SHA[- ]?256\s+digest\s*:\s*([0-9a-fA-F:\s]+)',line,re.I)
+              if m:
+                  digest=re.sub('[^0-9a-fA-F]','',m.group(1)).lower()
+                  if len(digest)==64:digests.append(digest)
+          if digests!=['1ab47eb692c5f25d42cef11d6ae9993a31ae5fda157f7d7f41a400490db6e0a6']:
+              raise SystemExit('Signing certificate mismatch')
+          print('PASS permanent stable signer:',p)
+          PY
+            "$AAPT" dump badging "$APK" > /tmp/keypop-rc50-badging.txt
+            grep -Fq "name='com.aetherkeys.keyboard.stablev2'" /tmp/keypop-rc50-badging.txt
+            python3 - <<'PY'
+          import re
+          s=open('/tmp/keypop-rc50-badging.txt').read()
+          v=int(re.search(r"versionCode='(\d+)'",s).group(1))
+          assert v>=80000
+          print('PASS stable versionCode',v)
+          PY
+          done
+      - name: Verify incomplete-word candidate data before Android emulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          lex=Path('app/src/main/java/com/aetherkeys/keyboard/KeyPopLexicon.kt').read_text()
+          comp=Path('app/src/main/java/com/aetherkeys/keyboard/KeyPopCompletionLexicon.kt').read_text()
+          assert 'KeyPopCompletionLexicon.candidates(fragment,32)' in lex
+          assert 'deliverable deliverables' in comp
+          assert Path('app/src/test/java/com/aetherkeys/keyboard/KeyPopCompletionLexiconTest.kt').is_file()
+          # Initial auto-shift must not depend on the host editor's suggestion flag.
+          caps=Path('app/src/main/java/com/aetherkeys/keyboard/KeyPopTypingRules.kt').read_text()
+          ime=Path('app/src/main/java/com/aetherkeys/keyboard/AetherImeService.kt').read_text()
+          settings=Path('app/src/main/java/com/aetherkeys/keyboard/MainActivity.kt').read_text()
+          assert 'fun textAllowsCapitalization' in caps
+          assert 'initialSelStart==0 && initialSelEnd==0' in caps
+          assert 'capitalizationContext' in ime
+          assert 'Capitalize the very first letter' in settings
+          assert 'Capitalize after sentences and line breaks' in settings
+          assert 'autoCapSentences' in ime
+          assert 'sentencesEnabled' in caps
+          # The first frame must visibly render the Shift key as active.
+          assert 'updateShiftKeys()\n    }\n    private fun addRow' in ime
+          assert Path('app/src/test/java/com/aetherkeys/keyboard/KeyPopRC48InitialCapitalizationTest.kt').is_file()
+          assert Path('app/src/androidTest/java/com/aetherkeys/keyboard/KeyPopRC48CapitalizationToggleInstrumentedTest.kt').is_file()
+          assert Path('app/src/test/java/com/aetherkeys/keyboard/KeyPopRC47AutoCapitalizationTest.kt').is_file()
+          assert 'CREATE TABLE IF NOT EXISTS personal_words' in Path('app/src/main/java/com/aetherkeys/keyboard/KeyPopPersonalLanguageModel.kt').read_text()
+          assert 'KeyPopDigitSlipRules.repairCandidate' in lex
+          assert 'rememberAtTypingBoundary' in ime
+          assert Path('app/src/test/java/com/aetherkeys/keyboard/KeyPopRC49KeyboardNoiseTest.kt').is_file()
+          assert Path('app/src/androidTest/java/com/aetherkeys/keyboard/KeyPopRC49PersonalLearningInstrumentedTest.kt').is_file()
+          manifest=Path('app/src/main/AndroidManifest.xml').read_text()
+          assert 'android:label="KeyPop"' in manifest
+          assert 'android:label="KeyPop Keyboard"' in manifest
+          assert 'android:label="KeyPop RC47"' not in manifest
+          assert 'Installed version:' in settings
+          assert 'KeyPopShortWordRecovery.suggestions(fragment,beforeCursor,4)' in lex
+          assert Path('app/src/test/java/com/aetherkeys/keyboard/KeyPopRC50ShortWordRegressionTest.kt').is_file()
+          assert Path('app/src/androidTest/java/com/aetherkeys/keyboard/KeyPopRC50VersionIdentityInstrumentedTest.kt').is_file()
+          print('PASS installed-version, short word and legacy regression sources')
+          PY
+      - name: Download signed RC49 release for real in-place upgrade verification
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release download v1.0.49-rc49-personal-predictions-stable-signed \
+            --pattern 'KeyPop-RC49-universal-signed.apk' --dir dist --repo "$GH_REPO"
+          test -s dist/KeyPop-RC49-universal-signed.apk
+      - name: Enable KVM for Android emulator
+        shell: bash
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-keypop-kvm.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Test real signed RC49-to-RC50 upgrade and keyboard regressions
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: default
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          script: |
+            set -euo pipefail
+            adb install -r dist/KeyPop-RC49-universal-signed.apk
+            adb shell pm path com.aetherkeys.keyboard.stablev2 | grep -q package:
+            adb install -r dist/KeyPop-RC50-universal-signed.apk
+            adb shell pm path com.aetherkeys.keyboard.stablev2 | grep -q package:
+            adb shell am start -W -n com.aetherkeys.keyboard.stablev2/com.aetherkeys.keyboard.MainActivity -a android.intent.action.MAIN -c android.intent.category.LAUNCHER
+            adb shell dumpsys activity activities | grep -E 'mResumedActivity|topResumedActivity|ResumedActivity' | grep -F 'com.aetherkeys.keyboard.MainActivity'
+            adb install -r dist/KeyPop-RC50-x86_64-debug.apk
+            adb install -r dist/KeyPop-RC50-androidTest.apk
+            adb shell am instrument -w -r -e class com.aetherkeys.keyboard.KeyPopRuntimeSmokeTest,com.aetherkeys.keyboard.KeyPopRC40WhatsAppEnterInstrumentedTest,com.aetherkeys.keyboard.KeyPopRC42UrlEditingInstrumentedTest,com.aetherkeys.keyboard.KeyPopRC44PrivateAutofillInstrumentedTest,com.aetherkeys.keyboard.KeyPopRC48CapitalizationToggleInstrumentedTest,com.aetherkeys.keyboard.KeyPopRC49PersonalLearningInstrumentedTest,com.aetherkeys.keyboard.KeyPopRC50VersionIdentityInstrumentedTest com.aetherkeys.keyboard.rc50preview.test/androidx.test.runner.AndroidJUnitRunner | tee /tmp/keypop-rc50-instrumentation.txt
+            grep -E 'OK [(][0-9]+ tests?[)]' /tmp/keypop-rc50-instrumentation.txt
+            ! grep -Eq 'FAILURES!!!|INSTRUMENTATION_FAILED|Process crashed' /tmp/keypop-rc50-instrumentation.txt
+      - name: Publish signed ARM64 and Universal APKs directly to GitHub Release
+        # Direct publication avoids GitHub Actions artifact storage quota.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s dist/KeyPop-RC50-arm64-v8a-signed.apk
+          test -s dist/KeyPop-RC50-universal-signed.apk
+          gh release create v1.0.50-rc50-shortword-identity-stable-signed \
+            dist/KeyPop-RC50-arm64-v8a-signed.apk \
+            dist/KeyPop-RC50-universal-signed.apk \
+            --target "$GITHUB_SHA" --prerelease --repo "$GH_REPO" \
+            --title 'KeyPop RC50 — Truthful installed version and stronger short-word correction' \
+            --notes 'Corrects stale RC47 app and keyboard labels using the permanent names KeyPop and KeyPop Keyboard while displaying actual installed package version in Settings. Adds two-letter word error recovery in the live suggestion strip and context-aware correction of te to the, preserving safety exclusions. Includes unit tests, signed identity checks, and real RC49 to RC50 emulator upgrade verification. Retains RC49 encrypted learning, themes and secure vault.'
