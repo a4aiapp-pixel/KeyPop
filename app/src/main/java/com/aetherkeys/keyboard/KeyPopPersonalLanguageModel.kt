@@ -25,7 +25,7 @@ import javax.crypto.spec.GCMParameterSpec
 class KeyPopPersonalLanguageModel(context:Context) {
     private val app=context.applicationContext
     private val prefs=app.getSharedPreferences("keypop",Context.MODE_PRIVATE)
-    private val helper=object:SQLiteOpenHelper(app,"keypop_personal_phrases.db",null,2) {
+    private val helper=object:SQLiteOpenHelper(app,"keypop_personal_phrases.db",null,3) {
         override fun onCreate(db:SQLiteDatabase) {
             db.execSQL("CREATE TABLE next_words ("+
                 "context_id TEXT NOT NULL, word_id TEXT NOT NULL, "+
@@ -34,6 +34,17 @@ class KeyPopPersonalLanguageModel(context:Context) {
                 "PRIMARY KEY(context_id,word_id))")
             db.execSQL("CREATE INDEX idx_next_words ON next_words(context_id, uses DESC)")
             createFeedback(db)
+            createWordFrequency(db)
+        }
+        /** Per-language word use counts, securely keyed and encrypted; no raw
+         * typed messages or plaintext tokens are persisted in SQLite. */
+        private fun createWordFrequency(db:SQLiteDatabase) {
+            db.execSQL("CREATE TABLE IF NOT EXISTS personal_words ("+
+                "lang INTEGER NOT NULL, word_id TEXT NOT NULL, cipher BLOB NOT NULL, "+
+                "uses INTEGER NOT NULL, last_seen INTEGER NOT NULL, "+
+                "PRIMARY KEY(lang,word_id))")
+            db.execSQL("CREATE INDEX IF NOT EXISTS idx_personal_word_frequency "+
+                "ON personal_words(lang,uses DESC,last_seen DESC)")
         }
         private fun createFeedback(db:SQLiteDatabase) {
             db.execSQL("CREATE TABLE IF NOT EXISTS correction_feedback ("+
@@ -46,6 +57,7 @@ class KeyPopPersonalLanguageModel(context:Context) {
         }
         override fun onUpgrade(db:SQLiteDatabase,old:Int,new:Int) {
             if(old<2)createFeedback(db)
+            if(old<3)createWordFrequency(db)
         }
     }
     private val secureKey:SecretKey by lazy {
@@ -97,11 +109,12 @@ class KeyPopPersonalLanguageModel(context:Context) {
             .filter{it.length in 2..28}.take(40).toList()
     /** Never memorize numeric, URL-like, email-like, command or suspicious text. */
     fun canLearn(text:String,word:String):Boolean {
-        val context=text.takeLast(100)
+        // A newline starts a fresh local phrase; do not let a number in an
+        // unrelated earlier line disable personal learning indefinitely.
+        val context=text.takeLast(100).substringAfterLast('\n').substringAfterLast('\r')
         return KeyPopUnicodeWords.isToken(word) &&
             !context.any{it.isDigit()} &&
-            listOf("@","://","/","\\","=","#","[","]","{","}").none{it in context} &&
-            context.none{it=='\n'||it=='\r'}
+            listOf("@","://","/","\\","=","#","[","]","{","}").none{it in context}
     }
     private fun contexts(language:Int,words:List<String>):List<String> {
         if(words.isEmpty())return emptyList()
@@ -122,10 +135,22 @@ class KeyPopPersonalLanguageModel(context:Context) {
             !canLearn(before,committed))return
         val word=normalize(committed)
         val history=words(before.removeSuffix(before.takeLastWhile{it.isLetter()}))
-        if(history.isEmpty())return
         val db=helper.writableDatabase
         db.beginTransaction()
         try {
+            // Record even the *first* word of a message or sentence; older
+            // versions silently discarded it when history was empty.
+            val wordId=signature("word|"+word)
+            val now=System.currentTimeMillis()
+            val frequency=ContentValues().apply {
+                put("lang",language);put("word_id",wordId)
+                put("cipher",seal(word));put("uses",0);put("last_seen",now)
+            }
+            db.insertWithOnConflict("personal_words",null,frequency,
+                SQLiteDatabase.CONFLICT_IGNORE)
+            db.execSQL("UPDATE personal_words SET uses=MIN(uses+1,1000000), "+
+                "last_seen=? WHERE lang=? AND word_id=?",
+                arrayOf(now,language,wordId))
             for(context in contexts(language,history)){
                 val key=signature(context)
                 val id=signature("word|"+word)
@@ -157,9 +182,8 @@ class KeyPopPersonalLanguageModel(context:Context) {
         val cleanFragment=normalize(fragment)
         val prior=if(cleanFragment.isNotEmpty())
             words(before.removeSuffix(before.takeLastWhile{it.isLetter()})) else words(before)
-        if(prior.isEmpty())return emptyList()
         val searchContexts=contexts(language,prior)
-        val cacheKey=searchContexts.joinToString("|")
+        val cacheKey="$language|"+searchContexts.joinToString("|")
         if(cacheKey!=cachedContextKey) {
             val collected=LinkedHashSet<String>()
             for(context in searchContexts) {
@@ -173,6 +197,16 @@ class KeyPopPersonalLanguageModel(context:Context) {
                     }
                 }
                 if(collected.size>=36)break
+            }
+            // Persisted personal vocabulary complements contextual n-grams.
+            // This also works before the user types the first word.
+            helper.readableDatabase.query("personal_words",arrayOf("cipher"),
+                "lang=?",arrayOf(language.toString()),null,null,
+                "uses DESC, last_seen DESC","64").use {cursor->
+                while(cursor.moveToNext() && collected.size<96) {
+                    runCatching{open(cursor.getBlob(0))}.getOrNull()
+                        ?.let{collected.add(it)}
+                }
             }
             cachedWords=collected.toList()
             cachedContextKey=cacheKey
@@ -266,6 +300,7 @@ class KeyPopPersonalLanguageModel(context:Context) {
     }
     @Synchronized fun clear() {
         helper.writableDatabase.delete("next_words",null,null)
+        helper.writableDatabase.delete("personal_words",null,null)
         helper.writableDatabase.delete("correction_feedback",null,null)
         feedbackPresent=false
         cachedContextKey=null
