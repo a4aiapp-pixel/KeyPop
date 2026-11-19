@@ -225,6 +225,12 @@ class KeyPopLexicon(context:Context) {
             return null
         return KeyPopWordJoinRules.split(normalized,::isKnownEnglish)
     }
+    /** A physical QWERTY number-row slip is safe only when it produces a
+     * recognized complete word. Do not rewrite codes, model IDs, or names. */
+    private fun digitSlipCorrection(word:String):String? =
+        KeyPopDigitSlipRules.repairCandidate(word)
+            ?.takeIf(::isKnownEnglish)
+
     fun suggestions(lang:Int,fragment:String,limit:Int=3,previous:String="",
                     beforeCursor:String="",allowPersonal:Boolean=true):List<String> {
         val learned=if(allowPersonal)store.getStringSet("learned_"+lang,emptySet()).orEmpty()
@@ -259,7 +265,8 @@ class KeyPopLexicon(context:Context) {
         val ordered=if(exact.isNotEmpty())
             exact.take(2)+fuzzy.take(3)+completions
             else fuzzy.take(3)+completions
-        return (listOfNotNull(joinedWordCorrection(lang,fragment,allowPersonal))+
+        return (listOfNotNull(if(lang==0)digitSlipCorrection(fragment) else null)+
+            listOfNotNull(joinedWordCorrection(lang,fragment,allowPersonal))+
             listOfNotNull(KeyPopTypingIntelligence.correction(lang,fragment))+
             ordered).distinct().filter{it!=normalized}
             .take(limit.coerceIn(1,8))
@@ -276,7 +283,7 @@ class KeyPopLexicon(context:Context) {
         if(lang!=0)return null
         val normalized=word.lowercase(Locale.ROOT)
         if(normalized in store.getStringSet("manual_0",emptySet()).orEmpty())return null
-        return if(normalized=="topredict")"to predict"
+        return digitSlipCorrection(normalized) ?:if(normalized=="topredict")"to predict"
             else KeyPopTypingIntelligence.correction(lang,normalized)
     }
     /** The suggestion chip may offer an ambiguous candidate that would be
@@ -285,6 +292,7 @@ class KeyPopLexicon(context:Context) {
         val normalized=word.trim().lowercase(Locale.ROOT)
         if(lang!=0 || normalized.length !in 3..22)return null
         if(normalized in store.getStringSet("manual_0",emptySet()).orEmpty())return null
+        digitSlipCorrection(normalized)?.let{return it}
         if(isKnownEnglish(normalized))return null
         joinedWordCorrection(lang,normalized)?.let{return it}
         KeyPopTypingIntelligence.correction(lang,normalized)?.let{return it}
@@ -299,6 +307,7 @@ class KeyPopLexicon(context:Context) {
             return null
         val base=when(lang){1->urdu;2->sindhi;else->english}
         if(normalized in base)return null
+        if(lang==0)digitSlipCorrection(normalized)?.let{return it}
         joinedWordCorrection(lang,word,allowPersonal)?.let{return it}
         val learned=if(allowPersonal)store.getStringSet("learned_"+lang,emptySet()).orEmpty()
             else emptySet()
