@@ -88,7 +88,7 @@ class AetherImeService : InputMethodService() {
     private var lastKeyboardTouchAt=0L
     private var lastKnownSelection:Int?=null
     private var hasSelectedRange=false
-    private val trailingWordPattern=Regex("[\\p{L}\\p{M}]+(?:['’][\\p{L}\\p{M}]+)*$")
+    private val trailingWordPattern=Regex("[\\p{L}\\p{M}]+(?:[0-9][\\p{L}\\p{M}]+)?(?:['’][\\p{L}\\p{M}]+)*$")
     // Cache immutable visual primitives once per keyboard rebuild, not per key.
     private var renderSkin:KeyPopSkin?=null
     private var regularKeyBackground:android.graphics.drawable.Drawable?=null
