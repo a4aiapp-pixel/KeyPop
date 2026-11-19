@@ -8,7 +8,7 @@ import android.widget.EditText
  * cannot change another application's EditText selection or cursor colors.
  */
 object KeyPopSelectionStyle {
-    const val DEFAULT_COLOR:Int = 0xFF195A91.toInt()
+    val DEFAULT_COLOR:Int = 0xFF195A91.toInt()
     const val DEFAULT_OPACITY:Int = 88
     const val COLOR_KEY="selectionHighlightColor"
     const val OPACITY_KEY="selectionHighlightOpacity"
