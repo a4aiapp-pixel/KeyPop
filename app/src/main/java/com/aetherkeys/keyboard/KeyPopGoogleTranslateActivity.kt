@@ -74,6 +74,7 @@ class KeyPopGoogleTranslateActivity:Activity() {
         root.addView(text("Google Translate · optional",23f))
         root.addView(text("KeyPop's own offline translation remains the default. Opening this screen does not send your text anywhere. Choose an action below to share it with Google.",13f,muted))
         input=EditText(this).apply{
+            KeyPopSelectionStyle.apply(this)
             hint="Type or review the text to translate"
             setText(intent.getStringExtra("text").orEmpty())
             setHintTextColor(muted);setTextColor(fg);textSize=16f
