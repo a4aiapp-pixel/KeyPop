@@ -156,7 +156,9 @@ class KeyboardPresetPreview(
             paint.shader=null
             paint.textAlign=Paint.Align.CENTER
             paint.typeface=android.graphics.Typeface.create(skin.font,android.graphics.Typeface.NORMAL)
-            paint.color=if(primary)Color.WHITE else skin.ink
+            paint.color=if(primary) {
+                if(Color.luminance(skin.accent)>0.47)Color.BLACK else Color.WHITE
+            } else skin.ink
             val selectedFont=context.getSharedPreferences("keypop",Context.MODE_PRIVATE)
                 .getInt("font",candidate.font).coerceIn(12,32)
             paint.textSize=dp(if(label.length>=5)7.8f else
