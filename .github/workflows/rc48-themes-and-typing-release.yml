@@ -142,6 +142,15 @@ jobs:
           assert 'KeyPopCompletionLexicon.candidates(fragment,32)' in lex
           assert 'deliverable deliverables' in comp
           assert Path('app/src/test/java/com/aetherkeys/keyboard/KeyPopCompletionLexiconTest.kt').is_file()
+          # Initial auto-shift must not depend on the host editor's suggestion flag.
+          caps=Path('app/src/main/java/com/aetherkeys/keyboard/KeyPopTypingRules.kt').read_text()
+          ime=Path('app/src/main/java/com/aetherkeys/keyboard/AetherImeService.kt').read_text()
+          settings=Path('app/src/main/java/com/aetherkeys/keyboard/MainActivity.kt').read_text()
+          assert 'fun textAllowsCapitalization' in caps
+          assert 'initialSelStart==0 && initialSelEnd==0' in caps
+          assert 'capitalizationContext' in ime
+          assert 'Auto-capitalize first letter in new fields and sentences' in settings
+          assert Path('app/src/test/java/com/aetherkeys/keyboard/KeyPopRC47AutoCapitalizationTest.kt').is_file()
           print('PASS partial word vocabulary and test source')
           PY
       - name: Download previously signed RC47 for actual upgrade verification
