@@ -149,7 +149,12 @@ jobs:
           assert 'fun textAllowsCapitalization' in caps
           assert 'initialSelStart==0 && initialSelEnd==0' in caps
           assert 'capitalizationContext' in ime
-          assert 'Auto-capitalize first letter in new fields and sentences' in settings
+          assert 'Capitalize the very first letter' in settings
+          assert 'Capitalize after sentences and line breaks' in settings
+          assert 'autoCapSentences' in ime
+          assert 'sentencesEnabled' in caps
+          assert Path('app/src/test/java/com/aetherkeys/keyboard/KeyPopRC48InitialCapitalizationTest.kt').is_file()
+          assert Path('app/src/androidTest/java/com/aetherkeys/keyboard/KeyPopRC48CapitalizationToggleInstrumentedTest.kt').is_file()
           assert Path('app/src/test/java/com/aetherkeys/keyboard/KeyPopRC47AutoCapitalizationTest.kt').is_file()
           print('PASS partial word vocabulary and test source')
           PY
@@ -187,7 +192,7 @@ jobs:
             adb shell dumpsys activity activities | grep -E 'mResumedActivity|topResumedActivity|ResumedActivity' | grep -F 'com.aetherkeys.keyboard.MainActivity'
             adb install -r dist/KeyPop-RC48-x86_64-debug.apk
             adb install -r dist/KeyPop-RC48-androidTest.apk
-            adb shell am instrument -w -r -e class com.aetherkeys.keyboard.KeyPopRuntimeSmokeTest,com.aetherkeys.keyboard.KeyPopRC40WhatsAppEnterInstrumentedTest,com.aetherkeys.keyboard.KeyPopRC42UrlEditingInstrumentedTest,com.aetherkeys.keyboard.KeyPopRC44PrivateAutofillInstrumentedTest com.aetherkeys.keyboard.rc48preview.test/androidx.test.runner.AndroidJUnitRunner | tee /tmp/keypop-rc48-instrumentation.txt
+            adb shell am instrument -w -r -e class com.aetherkeys.keyboard.KeyPopRuntimeSmokeTest,com.aetherkeys.keyboard.KeyPopRC40WhatsAppEnterInstrumentedTest,com.aetherkeys.keyboard.KeyPopRC42UrlEditingInstrumentedTest,com.aetherkeys.keyboard.KeyPopRC44PrivateAutofillInstrumentedTest,com.aetherkeys.keyboard.KeyPopRC48CapitalizationToggleInstrumentedTest com.aetherkeys.keyboard.rc48preview.test/androidx.test.runner.AndroidJUnitRunner | tee /tmp/keypop-rc48-instrumentation.txt
             grep -E 'OK [(][0-9]+ tests?[)]' /tmp/keypop-rc48-instrumentation.txt
             ! grep -Eq 'FAILURES!!!|INSTRUMENTATION_FAILED|Process crashed' /tmp/keypop-rc48-instrumentation.txt
       - name: Publish signed ARM64 and Universal APKs directly to GitHub Release
@@ -205,4 +210,4 @@ jobs:
             dist/KeyPop-RC48-universal-signed.apk \
             --target "$GITHUB_SHA" --prerelease --repo "$GH_REPO" \
             --title 'KeyPop RC48 — Distinctive themes and intelligent completions' \
-            --notes 'Replaces dated themes with distinctive metal, glass, carbon, clay, precision, neon, floating and editorial themes. Preserves Google, Samsung, Microsoft and AMOLED favorites. Adds local correction for googke, thmes and miatyped plus unfinished-word completion: deliverab -> deliverable. Offline dictionary remains private. Unit tests, lint, certificate check and real signed RC47-to-RC48 upgrade passed.'
+            --notes 'Replaces dated themes with distinctive metal, glass, carbon, clay, precision, neon, floating and editorial themes. Preserves Google, Samsung, Microsoft and AMOLED favorites. Adds local correction for googke, thmes and miatyped plus unfinished-word completion: deliverab -> deliverable. Adds independently configurable first-letter and sentence-capitalization toggles, with initial-caret fallback and Android emulator tests. Offline dictionary remains private. Unit tests, lint, certificate check and real signed RC47-to-RC48 upgrade passed.'
