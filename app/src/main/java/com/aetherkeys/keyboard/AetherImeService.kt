@@ -2233,12 +2233,18 @@ class AetherImeService : InputMethodService() {
             info.inputType,prior,prefs.getBoolean("autoCap",true),
             info.initialSelStart,info.initialSelEnd)
     }
+    /** Capitalization is safe in no-learning fields: read, but never retain text. */
+    private fun capitalizationContext(input:InputConnection):String? {
+        val info=currentInputEditorInfo ?:return null
+        if(!KeyPopTypingRules.textAllowsCapitalization(info.inputType))return null
+        return if(sensitive(info))runCatching {
+            input.getTextBeforeCursor(120,0)?.toString()
+        }.getOrNull() else readMirroredContext(input,120)
+    }
     private fun refreshAutoShiftVisual() {
         // Preserve null when the editor has not returned a snapshot. We can
         // use EditorInfo's confirmed zero selection for first focus instead.
-        val prior=currentInputConnection?.let{input->
-            if(sensitive(currentInputEditorInfo))null else readMirroredContext(input,120)
-        }
+        val prior=currentInputConnection?.let(::capitalizationContext)
         autoShiftVisual=shouldAutoCapitalize(prior)
     }
     /** Re-label only changed Latin keys instead of rebuilding the full IME. */
@@ -2569,10 +2575,7 @@ class AetherImeService : InputMethodService() {
                         SystemClock.elapsedRealtime()-it.acceptedAtMs<=5000L
                 }
                 pendingSuggestionBoundary=null
-                val priorSnapshot=connection?.let{input->
-                    if(sensitive(currentInputEditorInfo))null else
-                        readMirroredContext(input,120)
-                }
+                val priorSnapshot=connection?.let(::capitalizationContext)
                 val prior=priorSnapshot.orEmpty()
                 val latinMode=language==0 || prefs.getBoolean("romanMode",false)
                 val inputType=currentInputEditorInfo?.inputType?:0
