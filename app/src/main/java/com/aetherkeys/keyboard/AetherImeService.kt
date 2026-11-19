@@ -64,7 +64,7 @@ class AetherImeService : InputMethodService() {
     private val suggestionPrefsListener=SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if(inputViewActive && suggestionBar!=null) {
             when {
-                key=="autoCap" -> {
+                key=="autoCap" || key=="autoCapSentences" -> {
                     updateShiftKeys()
                     requestSuggestionRefresh()
                 }
@@ -2229,9 +2229,11 @@ class AetherImeService : InputMethodService() {
         val info=currentInputEditorInfo ?:return false
         if(autoCapSuppressed || hasSelectedRange ||
             (language!=0 && !prefs.getBoolean("romanMode",false)))return false
+        val cursor=lastKnownSelection
         return KeyPopTypingRules.shouldAutoCapitalize(
             info.inputType,prior,prefs.getBoolean("autoCap",true),
-            info.initialSelStart,info.initialSelEnd)
+            cursor ?: info.initialSelStart,cursor ?: info.initialSelEnd,
+            prefs.getBoolean("autoCapSentences",true))
     }
     /** Capitalization is safe in no-learning fields: read, but never retain text. */
     private fun capitalizationContext(input:InputConnection):String? {
