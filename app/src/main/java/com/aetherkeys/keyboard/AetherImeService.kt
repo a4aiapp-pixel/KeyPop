@@ -524,7 +524,9 @@ class AetherImeService : InputMethodService() {
                 (prefs.getInt("font",19)*0.70f).coerceIn(12f,24f)
             } else prefs.getInt("font",19).coerceIn(12,32).toFloat()
             isAllCaps=false
-            setTextColor(if(heavy) Color.WHITE else s.ink)
+            setTextColor(if(heavy) {
+                if(Color.luminance(s.accent)>0.47)Color.BLACK else Color.WHITE
+            } else s.ink)
             typeface=Typeface.create(s.font,Typeface.NORMAL)
             gravity=Gravity.CENTER
             background=android.graphics.drawable.RippleDrawable(
