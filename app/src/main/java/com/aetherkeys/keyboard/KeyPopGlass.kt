@@ -66,7 +66,7 @@ object KeyPopGlass {
                 skin.outline && !material -> alpha(skin.accent,36)
                 else -> Color.TRANSPARENT
             }
-            if(Color.alpha(edge)>0)setStroke((dp*if(treatment==3)1.4f else 1f)
+            if(Color.alpha(edge)>0)setStroke((dp*(if(treatment==3)1.4f else 1f))
                 .toInt().coerceAtLeast(1),edge)
         }
     }
