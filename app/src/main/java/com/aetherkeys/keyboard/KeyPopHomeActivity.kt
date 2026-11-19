@@ -104,6 +104,7 @@ class KeyPopHomeActivity : Activity() {
         }
         column.addView(text("Keyboard test field",15f,teal,true))
         val typingTest=EditText(this).apply {
+            KeyPopSelectionStyle.apply(this)
             hint="Tap here to test the selected keyboard"
             setHintTextColor(muted)
             setTextColor(ink)
@@ -176,6 +177,7 @@ class KeyPopHomeActivity : Activity() {
         val fields=linkedMapOf<String,android.view.View>()
         fun field(id:String,title:String,type:Int,options:Int) {
             val editor=EditText(this).apply {
+            KeyPopSelectionStyle.apply(this)
                 setSingleLine(true)
                 inputType=type
                 imeOptions=options or EditorInfo.IME_FLAG_NO_EXTRACT_UI
