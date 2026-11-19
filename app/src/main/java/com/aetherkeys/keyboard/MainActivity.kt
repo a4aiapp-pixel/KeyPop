@@ -897,7 +897,8 @@ class MainActivity:Activity() {
             addView(text("Punctuation & capitals",14f,accent,true))
             option(this,"Auto punctuation","autoPunctuate",true)
             option(this,"Double-space punctuation","doubleSpace",true)
-            option(this,"Capitalize first word and new sentences","autoCap",true)
+            option(this,"Auto-capitalize first letter in new fields and sentences",
+                "autoCap",true)
             option(this,"Auto-space after selected suggestions","suggestionSpace",true)
         }
         addBlock {
