@@ -12,9 +12,16 @@ object KeyPopUnifiedPrediction {
 
     fun rank(language:Int,typed:String,before:String,personal:List<String>,
              dictionary:List<String>,correction:String?=null,
-             rejected:Map<String,Int> = emptyMap(),limit:Int=8):List<String> {
+             rejected:Map<String,Int> = emptyMap(),limit:Int=8,
+             enhancedContext:Boolean=true):List<String> {
         val input=KeyPopUnicodeWords.normalize(typed)
-        val source=(listOfNotNull(correction)+dictionary+personal).distinct()
+        val contextual=if(enhancedContext)
+            KeyPopContextPhraseModel.ranked(language,before,typed,20) else emptyList()
+        val contextScores=contextual.associate {KeyPopUnicodeWords.normalize(it.word) to it.score}
+        val agreementSeeds=if(enhancedContext && language==0)
+            KeyPopGrammarAgreement.seeds(before,typed) else emptyList()
+        val source=(listOfNotNull(correction)+contextual.map{it.word}+
+            agreementSeeds+personal+dictionary).distinct()
         val personalized=personal.map{KeyPopUnicodeWords.normalize(it)}.toSet()
         val parsed=if(language==0)KeyPopPredictionContext.parse(before,typed) else null
         val results=ArrayList<Ranked>()
@@ -34,6 +41,9 @@ object KeyPopUnifiedPrediction {
             val grammar=if(parsed!=null)
                 KeyPopPredictionContext.score(parsed,typed,candidate) else 0
             if(grammar<=-200)continue
+            val agreement=if(enhancedContext && language==0)
+                KeyPopGrammarAgreement.score(before,typed,candidate) else 0
+            if(agreement<=-500)continue
             val isCorrection=correction!=null &&
                 candidate.equals(correction,ignoreCase=true)
             var score=when {
@@ -47,7 +57,8 @@ object KeyPopUnifiedPrediction {
             }
             if(name in personalized)score+=if(input.isEmpty())105 else 45
             if(name in dictionary)score+=18
-            score+=grammar
+            score+=grammar+agreement
+            score+=contextScores[name]?:0
             score-=(ordinal.coerceAtMost(16)*3)
             score-=(rejected[name]?:0).coerceIn(0,10)*90
             results.add(Ranked(candidate,score,ordinal))
