@@ -38,10 +38,10 @@ class KeyPopLexicon(context:Context) {
                         val gestureKey=""+word.first()+word.last()
                         glideIndex.getOrPut(gestureKey){ArrayList()}.add(item)
                     }
-                    if(tier<=10 && word.length in 3..16)for(i in word.indices) {
+                    if(tier<=20 && word.length in 3..16)for(i in word.indices) {
                         val key=word.removeRange(i,i+1)
                         val items=deleteIndex.getOrPut(key){ArrayList()}
-                        if(items.size<32)items.add(item)
+                        if(items.size<48)items.add(item)
                     }
                     if(tier<=10)oneLetter.getOrPut(word[0]){ArrayList()}.add(item)
                 }
@@ -112,7 +112,14 @@ class KeyPopLexicon(context:Context) {
         val fromDeletes=deletes.flatMap{deleteIndex[it].orEmpty().asSequence()}
         val fromBuckets=keys.asSequence()
             .flatMap{scowlIndex[it].orEmpty().asSequence()}
-        return (fromDeletes+fromBuckets)
+        // Include curated contemporary common terms and product names missing
+        // from frequency-tier dictionaries. Bounded on the prediction worker.
+        val curated=KeyPopTypingIntelligence.list(0).asSequence()
+            .filter{it.length in 3..24 && it.all{c->c in 'a'..'z'} &&
+                kotlin.math.abs(it.length-input.length)<=2 &&
+                (it.first()==input.first() || it.take(2)==input.take(2))}
+            .map{RankedWord(it,10)}
+        return (fromDeletes+fromBuckets+curated)
             .filter { it.tier<=35 &&
                 kotlin.math.abs(it.word.length-input.length)<=2 }
             .distinctBy{it.word}
@@ -207,7 +214,8 @@ class KeyPopLexicon(context:Context) {
     /** Do not split known dictionary words or explicit personal names.
      * Only an unambiguous two-word segmentation may be autocorrected. */
     private fun isKnownEnglish(word:String):Boolean =
-        word in english || word=="predict" || (scowlReady &&
+        word in english || word in KeyPopTypingIntelligence.list(0) ||
+        word=="predict" || (scowlReady &&
             scowlIndex[word.take(2)].orEmpty().any{it.word==word})
 
     fun joinedWordCorrection(lang:Int,typed:String,allowPersonal:Boolean=true):String? {
