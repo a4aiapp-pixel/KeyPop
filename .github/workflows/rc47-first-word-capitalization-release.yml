@@ -41,7 +41,7 @@ jobs:
           assert 'KeyPopSelectionStyle' in open('app/src/main/java/com/aetherkeys/keyboard/MainActivity.kt').read()
           # Verify that every explicit emulator test suite exists before a costly build.
           import pathlib,re
-          workflow=pathlib.Path('.github/workflows/rc47-context-selection-release.yml').read_text()
+          workflow=pathlib.Path('.github/workflows/rc47-first-word-capitalization-release.yml').read_text()
           suites=re.search(r'adb shell am instrument[^\n]*\s-e class\s+([\w.,]+)\s+', workflow)
           assert suites, 'Missing instrumentation suites declaration'
           for qualified in suites.group(1).split(','):
