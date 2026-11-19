@@ -158,11 +158,11 @@ jobs:
           assert Path('app/src/test/java/com/aetherkeys/keyboard/KeyPopRC48InitialCapitalizationTest.kt').is_file()
           assert Path('app/src/androidTest/java/com/aetherkeys/keyboard/KeyPopRC48CapitalizationToggleInstrumentedTest.kt').is_file()
           assert Path('app/src/test/java/com/aetherkeys/keyboard/KeyPopRC47AutoCapitalizationTest.kt').is_file()
-          assert 'CREATE TABLE IF NOT EXISTS personal_words' in pathlib.Path('app/src/main/java/com/aetherkeys/keyboard/KeyPopPersonalLanguageModel.kt').read_text()
+          assert 'CREATE TABLE IF NOT EXISTS personal_words' in Path('app/src/main/java/com/aetherkeys/keyboard/KeyPopPersonalLanguageModel.kt').read_text()
           assert 'KeyPopDigitSlipRules.repairCandidate' in lex
           assert 'rememberAtTypingBoundary' in ime
-          assert pathlib.Path('app/src/test/java/com/aetherkeys/keyboard/KeyPopRC49KeyboardNoiseTest.kt').is_file()
-          assert pathlib.Path('app/src/androidTest/java/com/aetherkeys/keyboard/KeyPopRC49PersonalLearningInstrumentedTest.kt').is_file()
+          assert Path('app/src/test/java/com/aetherkeys/keyboard/KeyPopRC49KeyboardNoiseTest.kt').is_file()
+          assert Path('app/src/androidTest/java/com/aetherkeys/keyboard/KeyPopRC49PersonalLearningInstrumentedTest.kt').is_file()
           print('PASS encrypted personal-memory, next-word learning and typo regression sources')
           PY
       - name: Download RC48 signed release for real in-place upgrade verification
