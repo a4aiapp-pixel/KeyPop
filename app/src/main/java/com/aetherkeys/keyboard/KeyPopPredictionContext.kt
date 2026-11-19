@@ -74,7 +74,9 @@ object KeyPopPredictionContext {
         score(parse(beforeCursor,fragment),fragment,candidate)
 
     fun startsSentence(text:String):Boolean {
-        val before=text.trimEnd()
+        // Strip horizontal spacing only: newline is a sentence boundary and
+        // must not be silently removed before testing it.
+        val before=text.trimEnd { it==' ' || it=='\t' || it=='\r' }
         return before.isEmpty() ||
             before.last() in setOf('.','!','?','؟','۔','\n')
     }
