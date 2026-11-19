@@ -30,40 +30,65 @@ object KeyPopGlass {
      * three stacked glass layers on each key, increasing overdraw on devices
      * with smaller GPU budgets. Preserve depth with color stops instead.
      * No white key borders; outlined skins get only a subtle accent stroke. */
-    fun key(context:Context,skin:KeyPopSkin,primary:Boolean=false):Drawable {
+    fun key(context:Context,skin:KeyPopSkin,primary:Boolean=false,
+            previewIndex:Int=KeyPopSkins.index(context)):Drawable {
         val dp=context.resources.displayMetrics.density
-        val material=KeyPopSkins.index(context)==10
-        // Material keycaps must honor the same corner-size slider as other
-        // themes; otherwise the live preview would disagree with the keys.
+        val material=previewIndex==10
         val radius=KeyPopSkins.radius(skin,
             context.getSharedPreferences("keypop",Context.MODE_PRIVATE)
-                .getInt("round",13)).coerceIn(3f,26f)*dp
+                .getInt("round",13)).coerceIn(1f,34f)*dp
         val base=if(primary)skin.accent else skin.key
-        val light=blend(base,Color.WHITE,if(material).07f else .10f)
-        val dark=blend(base,skin.background,if(material).16f else .20f)
-        return GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-            intArrayOf(light,base,dark)).apply {
+        val treatment=skin.treatment
+        val colors=when(treatment) {
+            1 -> intArrayOf(blend(base,Color.WHITE,.50f),base,blend(base,skin.surface,.20f))
+            2,5,9,14 -> intArrayOf(base,base,base)
+            3 -> intArrayOf(blend(base,skin.background,.13f),base,blend(base,Color.BLACK,.15f))
+            4 -> intArrayOf(blend(base,Color.WHITE,.23f),base,blend(base,skin.surface,.08f))
+            6 -> intArrayOf(blend(base,Color.WHITE,.15f),base,blend(base,skin.background,.22f))
+            7 -> intArrayOf(blend(base,Color.WHITE,.07f),base,blend(base,Color.BLACK,.29f))
+            8 -> intArrayOf(blend(base,Color.WHITE,.21f),base,blend(base,skin.background,.18f))
+            13 -> intArrayOf(Color.WHITE,base,blend(base,skin.surface,.08f))
+            else -> intArrayOf(blend(base,Color.WHITE,if(material).07f else .10f),
+                base,blend(base,skin.background,if(material).16f else .20f))
+        }
+        val orientation=when(treatment){
+            0,6,8 -> GradientDrawable.Orientation.TL_BR
+            7 -> GradientDrawable.Orientation.LEFT_RIGHT
+            else -> GradientDrawable.Orientation.TOP_BOTTOM
+        }
+        return GradientDrawable(orientation,colors).apply {
             cornerRadius=radius
-            if(skin.outline && !material) {
-                setStroke(dp.coerceAtLeast(1f).toInt(),alpha(skin.accent,36))
+            val edge=when {
+                treatment==1 -> alpha(skin.accent,65)
+                treatment==3 -> alpha(skin.accent,135)
+                treatment==7 -> alpha(skin.accent,50)
+                treatment==13 -> alpha(skin.accent,28)
+                skin.outline && !material -> alpha(skin.accent,36)
+                else -> Color.TRANSPARENT
             }
+            if(Color.alpha(edge)>0)setStroke((dp*if(treatment==3)1.4f else 1f)
+                .toInt().coerceAtLeast(1),edge)
         }
     }
     fun panel(context:Context,skin:KeyPopSkin):Drawable {
         val dp=context.resources.displayMetrics.density
-        val material=KeyPopSkins.index(context)==10
-        val light=blend(skin.surface,Color.WHITE,if(material).045f else .08f)
-        val dark=blend(skin.surface,Color.BLACK,if(material).045f else .10f)
-        return GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-            intArrayOf(light,skin.surface,dark)).apply {
-            cornerRadius=(if(material)14f else 18f)*dp
-            // Glass is a surface treatment, not a white-bordered card.
-            if(!material) setStroke(dp.coerceAtLeast(1f).toInt(),
-                alpha(skin.ink,15))
+        val treatment=skin.treatment
+        val colors=when(treatment) {
+            1 -> intArrayOf(blend(skin.surface,Color.WHITE,.43f),skin.surface)
+            2,5,9,14 -> intArrayOf(skin.surface,skin.surface)
+            6,8 -> intArrayOf(blend(skin.surface,skin.accent,.14f),skin.surface)
+            else -> intArrayOf(blend(skin.surface,Color.WHITE,.06f),
+                blend(skin.surface,Color.BLACK,.07f))
+        }
+        return GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,colors).apply {
+            cornerRadius=(if(treatment in setOf(2,5,14))5f else 16f)*dp
+            if(treatment==3||treatment==7)
+                setStroke(dp.toInt().coerceAtLeast(1),alpha(skin.accent,35))
         }
     }
     fun background(context:Context,skin:KeyPopSkin):Drawable {
-        val dp=context.resources.displayMetrics.density
+        if(skin.treatment==9||skin.treatment==14)
+            return GradientDrawable().apply{setColor(skin.background)}
         return shape(intArrayOf(skin.background,
             blend(skin.background,skin.surface,.13f),
             blend(skin.background,Color.BLACK,.11f)),0f,Color.TRANSPARENT)
