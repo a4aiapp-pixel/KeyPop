@@ -44,7 +44,7 @@ android {
         debug {
             // Debug builds retain an ephemeral test-only signature and their
             // OWN app identity. Never distribute them as an upgrade path.
-            applicationIdSuffix = ".rc47preview"
+            applicationIdSuffix = ".rc48preview"
             versionNameSuffix = "-debug-test-only"
         }
         release {
