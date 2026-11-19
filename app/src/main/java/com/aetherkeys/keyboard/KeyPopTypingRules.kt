@@ -21,11 +21,35 @@ object KeyPopTypingRules {
             InputType.TYPE_TEXT_VARIATION_PHONETIC
         )
     }
-    /** Local suggestions can be available even when automatic edits and learning are disabled. */
-    /** Unknown editor context must not be treated as a new empty field. */
-    fun shouldAutoCapitalize(inputType:Int,before:String?,enabled:Boolean):Boolean =
-        enabled && before!=null && textAllowsAutomaticChanges(inputType) &&
-            KeyPopPredictionContext.startsSentence(before)
+    /**
+     * Capitalization is independent from suggestions/autocorrection. Chrome and
+     * other ordinary editors may set NO_SUGGESTIONS; that is not a request for
+     * lowercase. Still exclude password, email, URL and non-text input types.
+     */
+    fun textAllowsCapitalization(inputType:Int):Boolean {
+        if(inputType and InputType.TYPE_MASK_CLASS!=InputType.TYPE_CLASS_TEXT)return false
+        return (inputType and InputType.TYPE_MASK_VARIATION) !in setOf(
+            InputType.TYPE_TEXT_VARIATION_PASSWORD,
+            InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD,
+            InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD,
+            InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS,
+            InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS,
+            InputType.TYPE_TEXT_VARIATION_URI,
+            InputType.TYPE_TEXT_VARIATION_FILTER,
+            InputType.TYPE_TEXT_VARIATION_PHONETIC
+        )
+    }
+    /**
+     * An editor can briefly return null for getTextBeforeCursor() during its
+     * first focus. Treat that as an empty field ONLY when both initial
+     * selection positions are confirmed zero; never guess for existing text.
+     */
+    fun shouldAutoCapitalize(inputType:Int,before:String?,enabled:Boolean,
+                             initialSelStart:Int=-1,initialSelEnd:Int=-1):Boolean {
+        if(!enabled || !textAllowsCapitalization(inputType))return false
+        if(before==null)return initialSelStart==0 && initialSelEnd==0
+        return KeyPopPredictionContext.startsSentence(before)
+    }
 
     fun textAllowsSuggestions(inputType:Int,imeOptions:Int=0):Boolean {
         if(inputType and InputType.TYPE_MASK_CLASS!=InputType.TYPE_CLASS_TEXT)return false
