@@ -99,6 +99,7 @@ class KeyPopVoiceActivity:Activity(),RecognitionListener {
             beginRecognition()
         })
         speech=EditText(this).apply{
+            KeyPopSelectionStyle.apply(this)
             hint="Recognized speech (editable before translation)"
             setHintTextColor(0xFF98AACB.toInt());setTextColor(Color.WHITE)
             minLines=2;maxLines=5
@@ -106,6 +107,7 @@ class KeyPopVoiceActivity:Activity(),RecognitionListener {
         root.addView(speech)
         root.addView(button("Translate the text above") {translate()})
         translated=EditText(this).apply{
+            KeyPopSelectionStyle.apply(this)
             hint="Translated output preview"
             setHintTextColor(0xFF98AACB.toInt());setTextColor(Color.WHITE)
             minLines=2;maxLines=5
