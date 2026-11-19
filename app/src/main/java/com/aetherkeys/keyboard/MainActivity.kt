@@ -325,13 +325,13 @@ class MainActivity:Activity() {
                 "themes" -> "designTheme"
                 "layouts","keysets" -> "designLayout"
                 "settingsHome","typing","languagePacks","design","designSize","designKeys",
-                "designTheme","designLayout","designSuggestions","translation","security",
+                "designTheme","designLayout","designSuggestions","designSelection","translation","security",
                 "tools","onboarding" -> requested ?: "settingsHome"
                 else -> "settingsHome"
             }
         pageHistory.clear()
         if(target!="settingsHome")pageHistory.addLast("settingsHome")
-        if(target in setOf("designTheme","designLayout","designSize","designKeys","designSuggestions"))
+        if(target in setOf("designTheme","designLayout","designSize","designKeys","designSuggestions","designSelection"))
             pageHistory.addLast("design")
         if(target=="designKeys")pageHistory.addLast("designSize")
         navigate(target,false)
@@ -383,6 +383,7 @@ class MainActivity:Activity() {
                 "designSize"->designSize()
                 "designKeys"->designKeys()
                 "designSuggestions"->designSuggestions()
+                "designSelection"->designSelection()
                 "typing"->typing()
                 "translation"->translation()
                 "security"->privacy()
@@ -430,6 +431,7 @@ class MainActivity:Activity() {
                 hint="Type with KeyPop";setHintTextColor(muted);setTextColor(ink)
                 minLines=2;setPadding(dp(12),dp(8),dp(12),dp(8))
                 background=shape(0xFF244052.toInt(),10)
+                KeyPopSelectionStyle.apply(this)
             }
             addView(input)
         }
@@ -537,6 +539,7 @@ class MainActivity:Activity() {
             action(this,"Layout","Geometry, letter order, keys and symbols"){navigate("designLayout")}
             action(this,"Size & keys","Keyboard size and individual key dimensions"){navigate("designSize")}
             action(this,"Suggestion strip","Visibility, position, text and colors"){navigate("designSuggestions")}
+            action(this,"Text selection highlight","Contrast, color and opacity inside KeyPop editors") {navigate("designSelection")}
         }
         addBlock {
             action(this,"Design Backup"){
@@ -560,6 +563,77 @@ class MainActivity:Activity() {
             option(this,"High contrast","highContrast"){preview.showLive()}
             option(this,"Animated themes","animatedThemes")
             range(this,"Key corner radius","round",3,40,13," dp"){preview.showLive()}
+            action(this,"Text selection highlight","Choose a high-contrast selection color") {navigate("designSelection")}
+        }
+    }
+
+    private fun designSelection() {
+        heading("Text selection highlight",
+            "A darker, configurable highlight for fields owned by KeyPop")
+        addBlock {
+            val preview=EditText(this@MainActivity).apply {
+                setText("Select these words to preview the text highlight.")
+                textSize=16f;setTextColor(ink)
+                minLines=2;setPadding(dp(12),dp(12),dp(12),dp(12))
+                background=shape(0xFF20394B.toInt(),10)
+                KeyPopSelectionStyle.apply(this)
+                setSelection(7,18)
+            }
+            addView(preview)
+            addView(text("Choose a preset",14f,accent,true))
+            listOf(
+                "Deep blue" to 0xFF195A91.toInt(),
+                "Emerald teal" to 0xFF006D67.toInt(),
+                "Royal violet" to 0xFF57379E.toInt(),
+                "Dark amber" to 0xFF795000.toInt(),
+                "Graphite" to 0xFF384654.toInt()
+            ).forEach { (name,color) ->
+                action(this,name) {
+                    prefs.edit().putInt(KeyPopSelectionStyle.COLOR_KEY,color).apply()
+                    navigate("designSelection",false)
+                }
+            }
+            addView(text("Fine-tune selection color",14f,accent,true))
+            val initial=prefs.getInt(KeyPopSelectionStyle.COLOR_KEY,
+                KeyPopSelectionStyle.DEFAULT_COLOR)
+            val channels=intArrayOf(Color.red(initial),Color.green(initial),
+                Color.blue(initial))
+            fun updateColor() {
+                prefs.edit().putInt(KeyPopSelectionStyle.COLOR_KEY,
+                    Color.rgb(channels[0],channels[1],channels[2])).apply()
+                KeyPopSelectionStyle.apply(preview)
+            }
+            listOf("Red","Green","Blue").forEachIndexed { index,name ->
+                val caption=text("$name: ${channels[index]}",13f,ink)
+                addView(caption)
+                val slider=SeekBar(this@MainActivity).apply {
+                    max=255;progress=channels[index]
+                    contentDescription="Selection $name"
+                    setOnSeekBarChangeListener(object:SeekBar.OnSeekBarChangeListener {
+                        override fun onProgressChanged(bar:SeekBar?,p:Int,user:Boolean) {
+                            if(!user)return
+                            channels[index]=p
+                            caption.text="$name: $p"
+                            updateColor()
+                        }
+                        override fun onStartTrackingTouch(bar:SeekBar?){}
+                        override fun onStopTrackingTouch(bar:SeekBar?){}
+                    })
+                }
+                addView(slider)
+            }
+            range(this,"Highlight opacity",KeyPopSelectionStyle.OPACITY_KEY,
+                25,100,KeyPopSelectionStyle.DEFAULT_OPACITY,"%") {
+                KeyPopSelectionStyle.apply(preview)
+            }
+            action(this,"Restore high-contrast default") {
+                prefs.edit().remove(KeyPopSelectionStyle.COLOR_KEY)
+                    .remove(KeyPopSelectionStyle.OPACITY_KEY).apply()
+                navigate("designSelection",false)
+            }
+            addView(text("The keyboard cannot override selection highlights in " +
+                "Chrome, WhatsApp or other apps: those belong to the app and Android. " +
+                "These controls apply to editable fields inside KeyPop.",12f,muted))
         }
     }
 
@@ -857,6 +931,7 @@ class MainActivity:Activity() {
         val input=EditText(this).apply {
             setText(saved.sorted().joinToString("\n"))
             hint="com.example.app (one package per line)"
+            KeyPopSelectionStyle.apply(this)
             minLines=4
         }
         AlertDialog.Builder(this).setTitle("Exclude apps from adaptive learning")
@@ -912,6 +987,7 @@ class MainActivity:Activity() {
                     "Key saved · enter to replace" else "Google Cloud Translation API key"
                 inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
                 setSingleLine(true);setTextColor(ink);setHintTextColor(muted)
+                KeyPopSelectionStyle.apply(this)
             }
             addView(field)
             action(this,"Save Google Cloud API key"){
