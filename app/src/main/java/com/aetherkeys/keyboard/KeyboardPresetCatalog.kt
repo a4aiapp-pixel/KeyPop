@@ -124,11 +124,9 @@ class KeyboardPresetPreview(
         val w=width.toFloat()
         val h=height.toFloat()
         val material=keyset==KeyPopKeysets.GBOARD
-        paint.shader=android.graphics.LinearGradient(0f,0f,w,h,
-            KeyPopGlass.blend(skin.background,Color.WHITE,0.10f),
-            KeyPopGlass.blend(skin.background,Color.BLACK,0.20f),
-            android.graphics.Shader.TileMode.CLAMP)
-        canvas.drawRoundRect(0f,0f,w,h,dp(10f),dp(10f),paint)
+        KeyPopBackdropDrawable(KeyPopSkins.index(context),skin).apply {
+            setBounds(0,0,width,height)
+        }.draw(canvas)
         paint.shader=null
         val toolbarHeight=if(material)dp(24f) else dp(7f)
         if(material){
@@ -151,18 +149,13 @@ class KeyboardPresetPreview(
         val available=h-toolbarHeight-footerHeight-dp(7f)-gap*(rows.size-1)
         val rowHeight=available/rows.size
         fun keyCap(label:String,x:Float,y:Float,kw:Float,kh:Float,primary:Boolean,cornerHint:String?){
-            val color=if(primary)skin.accent else skin.key
-            val rounding=context.getSharedPreferences("keypop",Context.MODE_PRIVATE)
-                .getInt("round",candidate.radius).coerceIn(3,40)
-            val radius=dp((if(material)rounding*.52f else rounding*.65f).coerceIn(2f,15f))
-            val top=KeyPopGlass.blend(color,Color.WHITE,0.14f)
-            val lower=KeyPopGlass.blend(color,Color.BLACK,0.12f)
-            paint.shader=android.graphics.LinearGradient(x,y,x,y+kh,top,lower,
-                android.graphics.Shader.TileMode.CLAMP)
-            canvas.drawRoundRect(x,y,x+kw,y+kh,radius,radius,paint)
+            // Render a scaled version of the live keycap, not a generic gradient.
+            KeyPopGlass.key(context,skin,primary).apply {
+                setBounds(x.toInt(),y.toInt(),(x+kw).toInt(),(y+kh).toInt())
+            }.draw(canvas)
             paint.shader=null
             paint.textAlign=Paint.Align.CENTER
-            paint.typeface=android.graphics.Typeface.create("sans-serif-medium",android.graphics.Typeface.NORMAL)
+            paint.typeface=android.graphics.Typeface.create(skin.font,android.graphics.Typeface.NORMAL)
             paint.color=if(primary)Color.WHITE else skin.ink
             val selectedFont=context.getSharedPreferences("keypop",Context.MODE_PRIVATE)
                 .getInt("font",candidate.font).coerceIn(12,32)
