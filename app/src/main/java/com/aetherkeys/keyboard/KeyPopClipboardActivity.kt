@@ -131,6 +131,7 @@ class KeyPopClipboardActivity:Activity() {
         })
         root.addView(tabs)
         search=EditText(this).apply{
+            KeyPopSelectionStyle.apply(this)
             hint="Search saved text";setSingleLine(true)
             textSize=14f;setTextColor(ink);setHintTextColor(muted)
             setPadding(d(12),0,d(12),0)
@@ -257,6 +258,7 @@ class KeyPopClipboardActivity:Activity() {
     }
     private fun promptBackupPassword(uri:Uri,isExport:Boolean,all:Boolean) {
         val password=EditText(this).apply {
+            KeyPopSelectionStyle.apply(this)
             hint="Password (minimum 8 characters)"
             inputType=InputType.TYPE_CLASS_TEXT or
                 InputType.TYPE_TEXT_VARIATION_PASSWORD
@@ -527,6 +529,7 @@ class KeyPopClipboardActivity:Activity() {
             }
             menu.add("Rename").setOnMenuItemClickListener{
                 val field=EditText(this@KeyPopClipboardActivity).apply {
+            KeyPopSelectionStyle.apply(this)
                     setText(item.label);setSingleLine(true)
                 }
                 AlertDialog.Builder(this@KeyPopClipboardActivity)
