@@ -1382,6 +1382,9 @@ class AetherImeService : InputMethodService() {
         if(isNumeric) addRow(root,listOf("-","@","↵"),keyHeight, true)
         else addRow(root,KeyPopKeysets.footer(KeyPopKeysets.selectedId(this),symbols),
             keyHeight,true)
+        // On the very first frame, visibly light the automatic Shift and render
+        // uppercase letter labels; do not wait for a keypress or selection event.
+        updateShiftKeys()
     }
     private fun addRow(parent:LinearLayout,labels:List<String>,height:Int,footer:Boolean=false,
                        layoutRow:Int=-1,layoutLanguage:Int=language) {
