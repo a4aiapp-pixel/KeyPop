@@ -2021,9 +2021,9 @@ class AetherImeService : InputMethodService() {
                 val dictionary=if(word.isEmpty())lexicon.nextWords(predLang,previous,before)
                     else lexicon.suggestions(predLang,word,limit,previous,
                         beforeCursor=if(useContext)before else "",allowPersonal=!privateMode)
-                val spelling=if(word.length>=3)
+                val spelling=if(word.length>=2)
                     lexicon.correction(predLang,word,before,allowPersonal=!privateMode) else null
-                val feedback=if(word.length>=3 && !privateMode)
+                val feedback=if(word.length>=2 && !privateMode)
                     runCatching{personalLanguage.rejectionWeights(
                         predLang,word,(personal+dictionary+listOfNotNull(spelling)).distinct())}
                         .getOrDefault(emptyMap()) else emptyMap()
@@ -2513,7 +2513,7 @@ class AetherImeService : InputMethodService() {
                                 it.language==predLang && it.word==word &&
                                     it.before.takeLast(48)==before
                             }?.correction
-                            val candidate=(cached ?:lexicon.fastCorrection(predLang,word))
+                            val candidate=(cached ?:lexicon.fastCorrection(predLang,word,before))
                                 ?.takeUnless{lastRejectedCorrection==
                                     (word to it)}
                             if(!prefs.getBoolean("correctMissingSpaces",true) &&
