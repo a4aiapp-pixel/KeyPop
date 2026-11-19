@@ -106,13 +106,14 @@ class KeyPopPersonalLanguageModel(context:Context) {
     private fun normalize(value:String):String=KeyPopUnicodeWords.normalize(value)
     private fun words(text:String):List<String> =
         tokenize.findAll(normalize(text.takeLast(240))).map{it.value}
-            .filter{it.length in 2..28}.take(40).toList()
+.filter{it.length in 2..28 || it=="i" || it=="a"}.take(40).toList()
     /** Never memorize numeric, URL-like, email-like, command or suspicious text. */
     fun canLearn(text:String,word:String):Boolean {
         // A newline starts a fresh local phrase; do not let a number in an
         // unrelated earlier line disable personal learning indefinitely.
         val context=text.takeLast(100).substringAfterLast('\n').substringAfterLast('\r')
-        return KeyPopUnicodeWords.isToken(word) &&
+        return (KeyPopUnicodeWords.isToken(word) ||
+                normalize(word) in setOf("i","a")) &&
             !context.any{it.isDigit()} &&
             listOf("@","://","/","\\","=","#","[","]","{","}").none{it in context}
     }
