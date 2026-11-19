@@ -8,7 +8,7 @@ on:
 permissions:
   contents: write
 concurrency:
-  group: rc46-settings-signed
+  group: rc46-autocap-signed
   cancel-in-progress: true
 jobs:
   build:
@@ -196,4 +196,4 @@ jobs:
       - name: Publish signed RC46 only after all gates pass
         run: |
           set -euo pipefail
-          gh release create v1.0.45-rc46-settings-restored-stable-signed dist/KeyPop-RC46-arm64-v8a-signed.apk dist/KeyPop-RC46-universal-signed.apk --target "$GITHUB_SHA" --prerelease --title 'KeyPop RC46 — Automatic first-word capitalization' --notes 'First word in a fresh text field and after sentence punctuation is automatically capitalized with visible Shift; manual override remains available. Added regression tests for first word, sentence boundaries, sensitive fields and disabled setting. Same stablev2 app ID and permanent signing certificate. In-place upgrade from RC45 was emulator-tested; no stored data intentionally cleared.'
+          gh release create v1.0.46-rc46-first-word-autocap-stable-signed dist/KeyPop-RC46-arm64-v8a-signed.apk dist/KeyPop-RC46-universal-signed.apk --target "$GITHUB_SHA" --prerelease --title 'KeyPop RC46 — Automatic first-word capitalization' --notes 'First word in a fresh text field and after sentence punctuation is automatically capitalized with visible Shift; manual override remains available. Added regression tests for first word, sentence boundaries, sensitive fields and disabled setting. Same stablev2 app ID and permanent signing certificate. In-place upgrade from RC45 was emulator-tested; no stored data intentionally cleared.'
