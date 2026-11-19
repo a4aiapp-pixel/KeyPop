@@ -22,6 +22,11 @@ object KeyPopTypingRules {
         )
     }
     /** Local suggestions can be available even when automatic edits and learning are disabled. */
+    /** Unknown editor context must not be treated as a new empty field. */
+    fun shouldAutoCapitalize(inputType:Int,before:String?,enabled:Boolean):Boolean =
+        enabled && before!=null && textAllowsAutomaticChanges(inputType) &&
+            KeyPopPredictionContext.startsSentence(before)
+
     fun textAllowsSuggestions(inputType:Int,imeOptions:Int=0):Boolean {
         if(inputType and InputType.TYPE_MASK_CLASS!=InputType.TYPE_CLASS_TEXT)return false
         return when(inputType and InputType.TYPE_MASK_VARIATION) {
