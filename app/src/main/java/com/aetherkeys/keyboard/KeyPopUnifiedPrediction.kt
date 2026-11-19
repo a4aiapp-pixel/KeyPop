@@ -28,7 +28,8 @@ object KeyPopUnifiedPrediction {
         val seen=HashSet<String>()
         for((ordinal,candidate) in source.withIndex()) {
             val name=KeyPopUnicodeWords.normalize(candidate)
-            if(name.isBlank() || name==input || !seen.add(name))continue
+            if(name.isBlank() || name==input || !seen.add(name) ||
+                (rejected[name]?:0)>=2)continue
             val exact=input.isNotEmpty() && name.startsWith(input)
             val edit=if(!exact && language==0 && input.length>=3)
                 KeyPopFuzzyRanker.distanceAtMost2(input,name.take(input.length))
@@ -55,7 +56,7 @@ object KeyPopUnifiedPrediction {
                 edit==2->230
                 else->180
             }
-            if(name in personalized)score+=if(input.isEmpty())105 else 45
+            if(name in personalized)score+=if(input.isEmpty())230 else 75
             if(name in dictionary)score+=18
             score+=grammar+agreement
             score+=contextScores[name]?:0
