@@ -131,45 +131,36 @@ jobs:
           print('PASS stable versionCode',v)
           PY
           done
-      - uses: actions/upload-artifact@v4
-        with:
-          name: KeyPop-RC48-signed-ARM64-and-Universal
-          path: dist/*-signed.apk
-          if-no-files-found: error
-      - uses: actions/upload-artifact@v4
-        with:
-          name: KeyPop-RC48-debug-emulator-inputs
-          path: |
-            dist/*-debug.apk
-            dist/*-androidTest.apk
-          if-no-files-found: error
-
-  emulator:
-    needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: KeyPop-RC48-signed-ARM64-and-Universal
-          path: dist
-      - uses: actions/download-artifact@v4
-        with:
-          name: KeyPop-RC48-debug-emulator-inputs
-          path: dist
-      - name: Download real signed RC47 capitalization release for upgrade regression
+      - name: Verify incomplete-word candidate data before Android emulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          lex=Path('app/src/main/java/com/aetherkeys/keyboard/KeyPopLexicon.kt').read_text()
+          comp=Path('app/src/main/java/com/aetherkeys/keyboard/KeyPopCompletionLexicon.kt').read_text()
+          assert 'KeyPopCompletionLexicon.candidates(fragment,32)' in lex
+          assert 'deliverable deliverables' in comp
+          assert Path('app/src/test/java/com/aetherkeys/keyboard/KeyPopCompletionLexiconTest.kt').is_file()
+          print('PASS partial word vocabulary and test source')
+          PY
+      - name: Download previously signed RC47 for actual upgrade verification
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+        shell: bash
         run: |
-          gh release download v1.0.47-rc47-initial-auto-caps-stable-signed --pattern 'KeyPop-RC47-universal-signed.apk' --dir dist --repo "$GH_REPO"
-      - name: KVM
+          set -euo pipefail
+          gh release download v1.0.47-rc47-initial-auto-caps-stable-signed \
+            --pattern 'KeyPop-RC47-universal-signed.apk' --dir dist --repo "$GH_REPO"
+          test -s dist/KeyPop-RC47-universal-signed.apk
+      - name: Enable KVM for Android emulator
+        shell: bash
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-keypop-kvm.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Real RC47 to RC48 upgrade and full dashboard launch
+      - name: Test real signed RC47-to-RC48 upgrade and keyboard regressions
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
@@ -190,22 +181,19 @@ jobs:
             adb shell am instrument -w -r -e class com.aetherkeys.keyboard.KeyPopRuntimeSmokeTest,com.aetherkeys.keyboard.KeyPopRC40WhatsAppEnterInstrumentedTest,com.aetherkeys.keyboard.KeyPopRC42UrlEditingInstrumentedTest,com.aetherkeys.keyboard.KeyPopRC44PrivateAutofillInstrumentedTest com.aetherkeys.keyboard.rc48preview.test/androidx.test.runner.AndroidJUnitRunner | tee /tmp/keypop-rc48-instrumentation.txt
             grep -E 'OK [(][0-9]+ tests?[)]' /tmp/keypop-rc48-instrumentation.txt
             ! grep -Eq 'FAILURES!!!|INSTRUMENTATION_FAILED|Process crashed' /tmp/keypop-rc48-instrumentation.txt
-
-  publish:
-    needs: [build, emulator]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    env:
-      GH_TOKEN: ${{ github.token }}
-      GH_REPO: ${{ github.repository }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: KeyPop-RC48-signed-ARM64-and-Universal
-          path: dist
-      - name: Publish signed RC48 only after all gates pass
+      - name: Publish signed ARM64 and Universal APKs directly to GitHub Release
+        # Direct publication avoids GitHub Actions artifact storage quota.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
         run: |
           set -euo pipefail
-          gh release create v1.0.48-rc48-themes-typing-stable-signed dist/KeyPop-RC48-arm64-v8a-signed.apk dist/KeyPop-RC48-universal-signed.apk --target "$GITHUB_SHA" --prerelease --title 'KeyPop RC48 — Distinctive themes and offline typing intelligence' --notes 'Eleven upgraded theme surfaces replace dated presets while retaining AMOLED Black, Google, Microsoft and Samsung. Rendering now varies typography, corners, gradients, elevation, spacing and backdrop patterns. The offline spelling engine recognizes googke to Google, thmes to themes and miatyped to mistyped; additional fuzzy candidates include contemporary vocabulary. Retains the RC47 first-word capitalization feature, app settings, stable signing identity and data-preserving upgrade checks.'
+          test -s dist/KeyPop-RC48-arm64-v8a-signed.apk
+          test -s dist/KeyPop-RC48-universal-signed.apk
+          gh release create v1.0.48-rc48-themes-typing-stable-signed \
+            dist/KeyPop-RC48-arm64-v8a-signed.apk \
+            dist/KeyPop-RC48-universal-signed.apk \
+            --target "$GITHUB_SHA" --prerelease --repo "$GH_REPO" \
+            --title 'KeyPop RC48 — Distinctive themes and intelligent completions' \
+            --notes 'Replaces dated themes with distinctive metal, glass, carbon, clay, precision, neon, floating and editorial themes. Preserves Google, Samsung, Microsoft and AMOLED favorites. Adds local correction for googke, thmes and miatyped plus unfinished-word completion: deliverab -> deliverable. Offline dictionary remains private. Unit tests, lint, certificate check and real signed RC47-to-RC48 upgrade passed.'
