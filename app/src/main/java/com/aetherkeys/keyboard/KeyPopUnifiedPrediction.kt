@@ -31,7 +31,7 @@ object KeyPopUnifiedPrediction {
             if(name.isBlank() || name==input || !seen.add(name) ||
                 (rejected[name]?:0)>=2)continue
             val exact=input.isNotEmpty() && name.startsWith(input)
-            val edit=if(!exact && language==0 && input.length>=3)
+            val edit=if(!exact && language==0 && input.length>=2)
                 KeyPopFuzzyRanker.distanceAtMost2(input,name.take(input.length))
                 else 3
             val joined=candidate.contains(' ') && candidate.replace(" ","")==input
