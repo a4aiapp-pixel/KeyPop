@@ -87,6 +87,7 @@ class AetherImeService : InputMethodService() {
     private var contextCacheMisses=0
     private var lastKeyboardTouchAt=0L
     private var lastKnownSelection:Int?=null
+    private var lastRememberedBoundary:String?=null
     private var hasSelectedRange=false
     private val trailingWordPattern=Regex("[\\p{L}\\p{M}]+(?:[0-9][\\p{L}\\p{M}]+)?(?:['’][\\p{L}\\p{M}]+)*$")
     // Cache immutable visual primitives once per keyboard rebuild, not per key.
@@ -465,6 +466,7 @@ class AetherImeService : InputMethodService() {
         editorContext.clear()
         pendingSuggestionBoundary=null
         latestSpaceAdvice=null
+        lastRememberedBoundary=null
         hasSelectedRange=info!=null && info.initialSelStart>=0 &&
             info.initialSelEnd>info.initialSelStart
         lastKnownSelection=info?.initialSelStart?.takeIf{it>=0}
@@ -2014,7 +2016,7 @@ class AetherImeService : InputMethodService() {
                 if(token!=predictionGeneration)return@execute
                 val start=SystemClock.elapsedRealtimeNanos()
                 val personal=if(!privateMode && useContext)
-                    runCatching{personalLanguage.candidates(predLang,before,word,3)}
+                    runCatching{personalLanguage.candidates(predLang,before,word,5)}
                         .getOrDefault(emptyList()) else emptyList()
                 val dictionary=if(word.isEmpty())lexicon.nextWords(predLang,previous,before)
                     else lexicon.suggestions(predLang,word,limit,previous,
@@ -2294,6 +2296,26 @@ class AetherImeService : InputMethodService() {
             }
         }
     }
+    /**
+     * Space already records ordinary word commitments. A word immediately
+     * followed by punctuation or the keyboard's Enter/Send action otherwise
+     * never reached the personal predictor. Record only explicitly completed,
+     * keyboard-typed tokens and never private, URL, numeric or selected data.
+     */
+    private fun rememberAtTypingBoundary(before:String?) {
+        if(before.isNullOrBlank() || hasSelectedRange ||
+            sensitive(currentInputEditorInfo) || !inputViewActive)return
+        val token=trailingWordPattern.find(before)?.value.orEmpty()
+        if(token.isEmpty() || token.any(Char::isDigit))return
+        val info=currentInputEditorInfo ?:return
+        if(!KeyPopTypingRules.textAllowsLearning(info.inputType))return
+        val marker=info.packageName+"|"+(lastKnownSelection?:-1)+"|"+before.takeLast(90)
+        if(marker==lastRememberedBoundary)return
+        lastRememberedBoundary=marker
+        val lang=if(language!=0 && prefs.getBoolean("romanMode",false))0
+            else KeyPopTextLanguage.detect(token,language)
+        learnPersonalAsync(lang,before.dropLast(token.length),token)
+    }
     /** Feedback storage uses HMAC identities, never plaintext typed histories. */
     private fun correctionFeedbackAsync(lang:Int,source:String,target:String,
                                         accepted:Boolean) {
@@ -2549,6 +2571,7 @@ class AetherImeService : InputMethodService() {
             "?123" -> { symbols=true;draw() }
             "ABC" -> { symbols=false;draw() }
             "↵" -> {
+                rememberAtTypingBoundary(currentInputConnection?.let(::capitalizationContext))
                 pendingSuggestionBoundary=null
                 val info=currentInputEditorInfo
                 if(KeyPopEnterPolicy.insertsNewline(info)) {
@@ -2591,6 +2614,7 @@ class AetherImeService : InputMethodService() {
                     InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS,
                     InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS)
                 val punct=value in setOf(",",".","!","?","،","؟","۔")
+                if(punct)rememberAtTypingBoundary(priorSnapshot)
                 val doAutoPunct=punct && !noAutoSpace &&
                     KeyPopTypingRules.autoPunctuationEnabled(
                         prefs.getBoolean("autoPunctuate",true),
