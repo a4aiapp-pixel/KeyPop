@@ -525,14 +525,14 @@ class AetherImeService : InputMethodService() {
             } else prefs.getInt("font",19).coerceIn(12,32).toFloat()
             isAllCaps=false
             setTextColor(if(heavy) Color.WHITE else s.ink)
-            typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL)
+            typeface=Typeface.create(s.font,Typeface.NORMAL)
             gravity=Gravity.CENTER
             background=android.graphics.drawable.RippleDrawable(
                 android.content.res.ColorStateList.valueOf((s.accent and 0x00FFFFFF) or (0x44 shl 24)),
                 bg,null)
             minWidth=0; minimumWidth=0; minHeight=0; minimumHeight=0
             setPadding(0,0,0,0)
-            elevation=d(if(KeyPopSkins.index(this@AetherImeService)==10)0 else 2).toFloat()
+            elevation=d(s.lift).toFloat()
             setOnClickListener { tapFeedback(this); action() }
         }
     }
@@ -1381,7 +1381,7 @@ class AetherImeService : InputMethodService() {
                        layoutRow:Int=-1,layoutLanguage:Int=language) {
         val row=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL; gravity=Gravity.CENTER }
         val preset=KeyboardPresetCatalog.selected(this)
-        val gap=prefs.getInt("spacing",4).coerceIn(1,10)
+        val gap=(prefs.getInt("spacing",4)+palette().gap).coerceIn(1,13)
         val hand=prefs.getInt("handMode",0)
         val offset=if(preset.id==KeyboardPresetCatalog.FACETED && layoutRow>=0 && layoutRow%2==1)d(14) else 0
         when(hand) {
