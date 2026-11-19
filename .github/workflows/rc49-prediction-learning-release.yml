@@ -199,7 +199,7 @@ jobs:
             adb shell dumpsys activity activities | grep -E 'mResumedActivity|topResumedActivity|ResumedActivity' | grep -F 'com.aetherkeys.keyboard.MainActivity'
             adb install -r dist/KeyPop-RC49-x86_64-debug.apk
             adb install -r dist/KeyPop-RC49-androidTest.apk
-            adb shell am instrument -w -r -e class com.aetherkeys.keyboard.KeyPopRuntimeSmokeTest,com.aetherkeys.keyboard.KeyPopRC40WhatsAppEnterInstrumentedTest,com.aetherkeys.keyboard.KeyPopRC42UrlEditingInstrumentedTest,com.aetherkeys.keyboard.KeyPopRC44PrivateAutofillInstrumentedTest,com.aetherkeys.keyboard.KeyPopRC49CapitalizationToggleInstrumentedTest com.aetherkeys.keyboard.rc49preview.test/androidx.test.runner.AndroidJUnitRunner | tee /tmp/keypop-rc49-instrumentation.txt
+            adb shell am instrument -w -r -e class com.aetherkeys.keyboard.KeyPopRuntimeSmokeTest,com.aetherkeys.keyboard.KeyPopRC40WhatsAppEnterInstrumentedTest,com.aetherkeys.keyboard.KeyPopRC42UrlEditingInstrumentedTest,com.aetherkeys.keyboard.KeyPopRC44PrivateAutofillInstrumentedTest,com.aetherkeys.keyboard.KeyPopRC48CapitalizationToggleInstrumentedTest,com.aetherkeys.keyboard.KeyPopRC49PersonalLearningInstrumentedTest com.aetherkeys.keyboard.rc49preview.test/androidx.test.runner.AndroidJUnitRunner | tee /tmp/keypop-rc49-instrumentation.txt
             grep -E 'OK [(][0-9]+ tests?[)]' /tmp/keypop-rc49-instrumentation.txt
             ! grep -Eq 'FAILURES!!!|INSTRUMENTATION_FAILED|Process crashed' /tmp/keypop-rc49-instrumentation.txt
       - name: Publish signed ARM64 and Universal APKs directly to GitHub Release
@@ -212,7 +212,7 @@ jobs:
           set -euo pipefail
           test -s dist/KeyPop-RC49-arm64-v8a-signed.apk
           test -s dist/KeyPop-RC49-universal-signed.apk
-          gh release create v1.0.48-rc49-themes-typing-stable-signed \
+          gh release create v1.0.49-rc49-personal-predictions-stable-signed \
             dist/KeyPop-RC49-arm64-v8a-signed.apk \
             dist/KeyPop-RC49-universal-signed.apk \
             --target "$GITHUB_SHA" --prerelease --repo "$GH_REPO" \
