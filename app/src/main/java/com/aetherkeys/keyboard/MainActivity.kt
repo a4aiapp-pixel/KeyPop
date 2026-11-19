@@ -399,7 +399,13 @@ class MainActivity:Activity() {
         scroller.post{scroller.scrollTo(0,0)}
     }
     private fun dashboard() {
+        val installed=runCatching {
+            packageManager.getPackageInfo(packageName,0)
+        }.getOrNull()
         heading("KeyPop Settings")
+        content.addView(text("Installed version: "+
+            (installed?.versionName?:"Unavailable")+"  ·  Code "+
+            (installed?.longVersionCode?.toString()?:"Unknown"),12f,muted))
         addBlock {
             action(this,"Customize Keyboard","Theme, layout, size and suggestion strip") {
                 navigate("design")
