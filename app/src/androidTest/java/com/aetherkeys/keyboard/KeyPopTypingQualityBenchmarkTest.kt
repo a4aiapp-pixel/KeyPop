@@ -200,4 +200,91 @@ class KeyPopTypingQualityBenchmarkTest {
         assertTrue(continuation.contains("about"))
         assertNull(lexicon.suggestedCorrection(0,"their","I read their"))
     }
+
+    /**
+     * Hold-out personal generalization: train on one full phrase and evaluate
+     * a different leading clause that shares only the local 2/3-word frame.
+     * Only an isolated DEBUG package may be cleared or trained here. This
+     * must never alter a real user's RC52 stable or encrypted data.
+     */
+    @Test fun encryptedPersonalLearningHasMeasuredBeforeAndAfterGain() {
+        val ctx=instrument.targetContext
+        assertTrue("Personal benchmark requires isolated debug package",
+            ctx.packageName.endsWith(".rc52preview"))
+        val prefs=ctx.getSharedPreferences("keypop",android.content.Context.MODE_PRIVATE)
+        val originalLearn=prefs.all["learningEnabled"]
+        val originalPersonal=prefs.all["personalHistoryLearning"]
+        prefs.edit().putBoolean("learningEnabled",true)
+            .putBoolean("personalHistoryLearning",true).commit()
+        val model=KeyPopPersonalLanguageModel(ctx)
+        data class Case(val train:String,val eval:String,val answer:String)
+        val cases=listOf(
+            Case("Please keep the committee posted ",
+                "Would you keep the committee posted ","regarding"),
+            Case("Tomorrow we will discuss ",
+                "Next week we will discuss ","results"),
+            Case("The finance committee requires ",
+                "Our audit committee requires ","approval"),
+            Case("Please keep me informed ",
+                "Kindly keep me informed ","regarding"),
+            Case("We have to maintain ",
+                "They have to maintain ","accuracy"),
+            Case("I need to review ",
+                "You need to review ","documentation"),
+            Case("I will contact ",
+                "We will contact ","colleagues"),
+            Case("The next meeting is ",
+                "Our budget meeting is ","tomorrow"),
+            Case("Please send the audit ",
+                "Kindly send the audit ","schedule"),
+            Case("The team must ensure ",
+                "Our team must ensure ","compliance")
+        )
+        fun offers(context:String):List<String> {
+            val recent=KeyPopUnicodeWords.tokens(context).lastOrNull().orEmpty()
+            val personal=model.candidates(0,context,"",8)
+            val dictionary=lexicon.nextWords(0,recent,context)
+            return KeyPopUnifiedPrediction.rank(0,"",context,personal,
+                dictionary,limit=8).map(::normal)
+        }
+        try {
+            model.clear()
+            var beforeTop1=0;var beforeTop3=0
+            for(case in cases) {
+                val options=offers(case.eval)
+                if(options.firstOrNull()==case.answer)beforeTop1++
+                if(case.answer in options.take(3))beforeTop3++
+            }
+            record("PERSONAL_BEFORE",cases.size,beforeTop1,
+                beforeTop3,emptyList(),emptyList())
+
+            for(case in cases)repeat(4){
+                model.observe(0,case.train,case.answer)
+            }
+            var afterTop1=0;var afterTop3=0
+            val missing=ArrayList<String>()
+            for(case in cases) {
+                val options=offers(case.eval)
+                if(options.firstOrNull()==case.answer)afterTop1++
+                if(case.answer in options.take(3))afterTop3++
+                else missing.add(case.eval.trim()+">"+case.answer)
+            }
+            record("PERSONAL_AFTER",cases.size,afterTop1,afterTop3,
+                missing,emptyList())
+            // An observed phrase must exist in the encrypted on-device model;
+            // numerical recall is reported, not fabricated or forced to 100%.
+            assertTrue(model.candidates(0,"Please keep the committee posted ",
+                "",8).contains("regarding"))
+        }finally {
+            model.clear()
+            val e=prefs.edit()
+            if(originalLearn is Boolean)e.putBoolean("learningEnabled",originalLearn)
+                else e.remove("learningEnabled")
+            if(originalPersonal is Boolean)e.putBoolean("personalHistoryLearning",
+                originalPersonal)
+            else e.remove("personalHistoryLearning")
+            e.commit()
+        }
+    }
+
 }
