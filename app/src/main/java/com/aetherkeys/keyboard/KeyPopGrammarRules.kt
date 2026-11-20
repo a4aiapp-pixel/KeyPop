@@ -73,6 +73,13 @@ object KeyPopGrammarRules {
     fun suggest(before:String,language:Int):KeyPopGrammarFix? {
         if(language!=0 || before.isBlank())return null
         val text=before.takeLast(150)
+        // Single-token contractions are genuine grammar improvements too:
+        // "im" and "Im" -> "I'm", but intentional "IM" stays untouched.
+        val lastWord=Regex("[A-Za-z]+$").find(text)?.value.orEmpty()
+        KeyPopContractionRules.correction(lastWord)?.let { replacement ->
+            return KeyPopGrammarFix("Fix: "+replacement,
+                lastWord.length,replacement,true)
+        }
         for((pattern,replacement) in rules) {
             val match=pattern.find(text) ?:continue
             if(match.range.last != text.lastIndex)continue
