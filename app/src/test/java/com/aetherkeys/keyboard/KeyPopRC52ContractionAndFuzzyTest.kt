@@ -56,10 +56,12 @@ class KeyPopRC52ContractionAndFuzzyTest {
     }
 
     @Test fun confidenceRejectsInconclusiveOrValidWordSubstitutions() {
-        val context=KeyPopPredictionContext.parse("name ","")
-        val choices=KeyPopFuzzyRanker.rank("samre",
-            sequenceOf("samra" to 35,"same" to 10),context,8)
-        assertNull(KeyPopFuzzyRanker.automatic(choices,aggressive=false))
+        val closeTie=listOf(
+            KeyPopFuzzyRanker.Match("samra",1,327,10),
+            KeyPopFuzzyRanker.Match("same",1,325,10))
+        assertNull(KeyPopFuzzyRanker.automatic(closeTie,aggressive=false))
+        assertNull(KeyPopFuzzyRanker.automatic(
+            listOf(KeyPopFuzzyRanker.Match("samra",1,345,35)),aggressive=true))
         assertNull(KeyPopFuzzyRanker.automatic(emptyList()))
     }
 }
