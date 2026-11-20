@@ -65,16 +65,16 @@ jobs:
             grep -F 'KP_QUALITY|group=SPELL_HOLDOUT' /tmp/keypop-typing-benchmark.txt
             grep -F 'KP_QUALITY|group=NEXT_HOLDOUT' /tmp/keypop-typing-benchmark.txt
             grep -F 'KP_QUALITY|group=GRAMMAR_RECALL' /tmp/keypop-typing-benchmark.txt
-            {
-              echo '## KeyPop RC52 typing quality — Android engine baseline'
-              echo ''
-              echo 'These figures measure the **KeyPop local engine**, not visible app UI, Gboard accuracy, Chrome/WhatsApp integration or real-device touch latency.'
-              echo ''
-              echo '### Raw measured counters'
-              echo '\`\`\`text'
-              grep 'KP_QUALITY|' /tmp/keypop-typing-benchmark.txt | sed 's/^INSTRUMENTATION_STATUS: stream=//'
-              echo '\`\`\`'
-              echo ''
-              echo '**Gboard parity/superiority: NOT VERIFIED — external paired trials not yet supplied.**'
-              echo 'Protocol: docs/KEYPOP_TYPING_QUALITY_ACCEPTANCE.md'
-            } >> "$GITHUB_STEP_SUMMARY"
+            grep -F 'KP_QUALITY|group=PERSONAL_BEFORE' /tmp/keypop-typing-benchmark.txt
+            grep -F 'KP_QUALITY|group=PERSONAL_AFTER' /tmp/keypop-typing-benchmark.txt
+            echo '## KeyPop RC52 typing quality — Android engine baseline' >> "$GITHUB_STEP_SUMMARY"
+            echo '' >> "$GITHUB_STEP_SUMMARY"
+            echo 'These figures measure the **KeyPop local engine**, not the visible suggestion strip, Gboard, Chrome/WhatsApp or real-device typing latency.' >> "$GITHUB_STEP_SUMMARY"
+            echo '' >> "$GITHUB_STEP_SUMMARY"
+            echo '### Raw measured counters' >> "$GITHUB_STEP_SUMMARY"
+            echo '~~~text' >> "$GITHUB_STEP_SUMMARY"
+            grep 'KP_QUALITY|' /tmp/keypop-typing-benchmark.txt | sed 's/^INSTRUMENTATION_STATUS: stream=//' >> "$GITHUB_STEP_SUMMARY"
+            echo '~~~' >> "$GITHUB_STEP_SUMMARY"
+            echo '' >> "$GITHUB_STEP_SUMMARY"
+            echo '**Gboard parity/superiority: NOT VERIFIED — matched real-device results are not available.**' >> "$GITHUB_STEP_SUMMARY"
+            echo 'Protocol: docs/KEYPOP_TYPING_QUALITY_ACCEPTANCE.md' >> "$GITHUB_STEP_SUMMARY"
