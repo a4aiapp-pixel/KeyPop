@@ -47,7 +47,7 @@ object KeyPopFuzzyRanker {
              parsed:KeyPopPredictionContext.Parsed,
              limit:Int=8):List<Match> {
         val input=typed.lowercase(Locale.ROOT)
-        if(input.length !in 4..22 || !input.all{it in 'a'..'z'})return emptyList()
+        if(input.length !in 3..22 || !input.all{it in 'a'..'z'})return emptyList()
         return candidates
             .filter { (word,_) -> word!=input &&
                 abs(word.length-input.length)<=2 && word.length in 3..24 }
@@ -84,14 +84,18 @@ object KeyPopFuzzyRanker {
         // The absence of a runner-up is NOT proof of confidence: an indexed
         // search may simply have failed to retrieve the true intended word.
         val margin=if(runnerUp==null)0 else best.score-runnerUp.score
-        val oneEditMargin=if(aggressive)32 else 55
+        val oneEditMargin=if(aggressive)24 else 45
         val twoEditMargin=if(aggressive)75 else 115
         return when {
             best.tier>20 ->null
+            // The old >=380 gate could not be met by ordinary one-edit
+            // candidate scores (typically 300-361). Short unknown names
+            // remain protected by a 5-letter minimum and tier-10 constraint.
             runnerUp==null && best.distance==1 &&
-                best.tier<=10 && best.score>=380 ->best.word
+                best.tier<=10 && best.score>=316 &&
+                best.word.length>=5 ->best.word
             runnerUp==null ->null
-            best.distance==1 && best.score>=315 &&
+            best.distance==1 && best.score>=300 &&
                 margin>=oneEditMargin ->best.word
             best.distance==2 && best.tier<=10 && best.score>=245 &&
                 margin>=twoEditMargin ->best.word
