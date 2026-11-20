@@ -1,0 +1,80 @@
+name: KeyPop Typing Quality Benchmark (engine only)
+on:
+  push:
+    branches: [quality/rc52-accuracy-benchmark-20261120]
+    paths:
+      - '.github/workflows/keypop-typing-quality-benchmark.yml'
+      - 'app/**'
+      - 'scripts/keypop_quality_compare.py'
+      - 'scripts/test_keypop_quality_compare.py'
+      - 'quality/**'
+      - 'docs/KEYPOP_TYPING_QUALITY_ACCEPTANCE.md'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: keypop-typing-quality-engine-benchmark
+  cancel-in-progress: true
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate paired comparator, without manufacturing Gboard data
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s scripts -p 'test_keypop_quality_compare.py' -v
+          test "$(wc -l < quality/paired_results_template.csv)" -eq 1
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install Android platform 36
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0"
+      - name: Compile all legacy Kotlin unit tests and the benchmark instrumentation APK
+        shell: bash
+        run: gradle --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest
+      - name: Enable KVM
+        shell: bash
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-keypop-bench-kvm.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Measure on Android 35 emulator with actual compiled KeyPop engine
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: default
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          script: |
+            set -euo pipefail
+            adb install -r app/build/outputs/apk/debug/app-x86_64-debug.apk
+            adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+            adb shell am instrument -w -r -e class com.aetherkeys.keyboard.KeyPopTypingQualityBenchmarkTest com.aetherkeys.keyboard.rc52preview.test/androidx.test.runner.AndroidJUnitRunner | tee /tmp/keypop-typing-benchmark.txt
+            grep -E 'OK [(][0-9]+ tests?[)]' /tmp/keypop-typing-benchmark.txt
+            ! grep -Eq 'FAILURES!!!|INSTRUMENTATION_FAILED|Process crashed' /tmp/keypop-typing-benchmark.txt
+            grep -F 'KP_QUALITY|group=SPELL_HOLDOUT' /tmp/keypop-typing-benchmark.txt
+            grep -F 'KP_QUALITY|group=NEXT_HOLDOUT' /tmp/keypop-typing-benchmark.txt
+            grep -F 'KP_QUALITY|group=GRAMMAR_RECALL' /tmp/keypop-typing-benchmark.txt
+            {
+              echo '## KeyPop RC52 typing quality — Android engine baseline'
+              echo ''
+              echo 'These figures measure the **KeyPop local engine**, not visible app UI, Gboard accuracy, Chrome/WhatsApp integration or real-device touch latency.'
+              echo ''
+              echo '### Raw measured counters'
+              echo '\`\`\`text'
+              grep 'KP_QUALITY|' /tmp/keypop-typing-benchmark.txt | sed 's/^INSTRUMENTATION_STATUS: stream=//'
+              echo '\`\`\`'
+              echo ''
+              echo '**Gboard parity/superiority: NOT VERIFIED — external paired trials not yet supplied.**'
+              echo 'Protocol: docs/KEYPOP_TYPING_QUALITY_ACCEPTANCE.md'
+            } >> "$GITHUB_STEP_SUMMARY"
