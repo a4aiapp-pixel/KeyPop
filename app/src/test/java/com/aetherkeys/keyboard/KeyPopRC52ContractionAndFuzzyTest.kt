@@ -52,7 +52,9 @@ class KeyPopRC52ContractionAndFuzzyTest {
             sequenceOf("google" to 10,"goggles" to 20),
             KeyPopPredictionContext.parse("find googkle","googkle"),8)
         assertEquals("google",long.first().word)
-        assertEquals("google",KeyPopFuzzyRanker.automatic(listOf(long.first())))
+        // The corrected candidate is discoverable and ranked first,
+        // but a single candidate alone is not sufficient to rewrite text.
+        assertNull(KeyPopFuzzyRanker.automatic(listOf(long.first())))
     }
 
     @Test fun confidenceRejectsInconclusiveOrValidWordSubstitutions() {
