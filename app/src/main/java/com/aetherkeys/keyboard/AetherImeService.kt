@@ -2080,6 +2080,9 @@ class AetherImeService : InputMethodService() {
                 val personal=if(!privateMode && useContext)
                     runCatching{personalLanguage.candidates(predLang,before,word,5)}
                         .getOrDefault(emptyList()) else emptyList()
+                val strongPersonal=if(!privateMode && useContext && word.isEmpty())
+                    runCatching{personalLanguage.strongCandidates(predLang,before,word,5)}
+                        .getOrDefault(emptySet()) else emptySet()
                 val dictionary=if(word.isEmpty())lexicon.nextWords(predLang,previous,before)
                     else lexicon.suggestions(predLang,word,limit,previous,
                         beforeCursor=if(useContext)before else "",allowPersonal=!privateMode)
@@ -2093,7 +2096,8 @@ class AetherImeService : InputMethodService() {
                 val values=KeyPopUnifiedPrediction.rank(predLang,word,before,
                     personal,dictionary,safeSpelling,feedback,8,
                     enhancedContext=useContext &&
-                        prefs.getBoolean("enhancedContextPredictions",true))
+                        prefs.getBoolean("enhancedContextPredictions",true),
+                    strongPersonal=strongPersonal)
                 val grammar=if(word.isNotEmpty() && !sensitive(info) && showGrammar)
                     KeyPopGrammarRules.suggest(before,predLang)
                         ?:lexicon.precedingWordSuggestion(predLang,before,word)
