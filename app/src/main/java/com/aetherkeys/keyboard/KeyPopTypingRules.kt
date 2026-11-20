@@ -85,8 +85,24 @@ object KeyPopTypingRules {
     fun textAllowsLearning(inputType:Int):Boolean =
         textAllowsAutomaticChanges(inputType)
 
-    fun autocorrectEnabled(toggle:Boolean,inputType:Int):Boolean =
-        toggle && textAllowsAutomaticChanges(inputType)
+    /**
+     * An explicit SEARCH action can make a mixed browser address/search field
+     * behave as an ordinary search query. Do not weaken password, email,
+     * phone, or URL protection: the IME still checks actual surrounding
+     * text for URL/email patterns before attempting an edit.
+     */
+    fun autocorrectEnabled(toggle:Boolean,inputType:Int,
+                           imeOptions:Int=0,allowSearch:Boolean=false):Boolean {
+        if(!toggle)return false
+        if(textAllowsAutomaticChanges(inputType))return true
+        if(!allowSearch || (imeOptions and EditorInfo.IME_MASK_ACTION)!=
+            EditorInfo.IME_ACTION_SEARCH)return false
+        if((inputType and InputType.TYPE_MASK_CLASS)!=InputType.TYPE_CLASS_TEXT)
+            return false
+        val variation=inputType and InputType.TYPE_MASK_VARIATION
+        return variation==InputType.TYPE_TEXT_VARIATION_NORMAL ||
+            variation==InputType.TYPE_TEXT_VARIATION_URI
+    }
     fun autoPunctuationEnabled(toggle:Boolean,inputType:Int):Boolean =
         toggle && textAllowsAutomaticChanges(inputType)
     /** Undo only the just-applied correction, never arbitrary editor text.
