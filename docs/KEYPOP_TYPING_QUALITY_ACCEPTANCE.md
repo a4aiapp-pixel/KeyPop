@@ -32,6 +32,14 @@
 
 **Real-device evidence** requires screenshots or structured observations with no private data. The emulator's KeyPop test activity is **not** evidence that Chrome or WhatsApp was tested. Missing apps must be marked **NOT RUN**, not passed. Test portrait and landscape, and use both newly installed and upgraded KeyPop.
 
+## Next-word accuracy: measured baseline versus desired target
+
+- **Verified RC52 engine baseline:** next-word top-1 **12/24 = 50.0%**; top-3 **19/24 = 79.2%**, on the original small fixed Android emulator corpus. These figures are *not* 99%, and are not Chrome/WhatsApp or Gboard measurements.
+- **99% is an aspirational target, not a currently measured result or a defensible guarantee across open-ended language.** Everyday sentences often have several equally natural continuations. The evaluation must predeclare acceptable alternatives and measure both top-1 quality and top-3 recall on a substantially larger, independently curated and blinded corpus.
+- **No training on benchmark cases.** Do not add those prompts, their exact expected continuations or other evaluation-only strings to the production phrase bank to manufacture accuracy. Improvements must generalize to unseen contexts and pass false-positive and latency checks.
+- **Diagnostic requirement:** report wrong top-1 choices and their top-three alternatives for every failed case. Correct context retrieval, agreement, ranking and personalized weighting as *classes*, not as individual lookups.
+- **Release gate:** never claim 99% next-word accuracy unless independently collected real-app evidence meets or exceeds it on a meaningful blinded corpus with an appropriate confidence interval; always publish the measured denominator, keyboard configuration and acceptable-word labeling method.
+
 ## Scoring definitions
 
 - **Top-1:** intended correction or one acceptable next word is first. **Top-3:** it appears in first three candidates. Respect the three-slot visible strip; internal top-8 recall alone does not count as a UI success.
