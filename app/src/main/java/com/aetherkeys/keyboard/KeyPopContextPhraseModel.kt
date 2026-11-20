@@ -211,7 +211,7 @@ object KeyPopContextPhraseModel {
         val previous=if(stem.isNotEmpty() && before.endsWith(fragment,ignoreCase=true))
             before.dropLast(fragment.length) else before
         val recent=previous.takeLast(200)
-        val lastBoundary=recent.indexOfLast { it in ".!?؟۔\\n" }
+        val lastBoundary=recent.indexOfLast { it in ".!?؟۔\n" }
         // A sentence boundary invalidates its old grammatical frame.
         // A new message starts with generic or personally learned priors,
         // not a stale continuation such as "posted on" after a full stop.
