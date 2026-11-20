@@ -329,43 +329,34 @@ class KeyPopLexicon(context:Context) {
             rankedFuzzy(normalized,beforeCursor,cache=allowPersonal),
             prefs.getBoolean("aggressivePredictions",true))
     }
-    /** Frequent-word glide decoder indexed by starting and ending keys.
-     * Repeated letters are collapsed because a finger traces each key once
-     * ("helo" can legitimately mean "hello"). No full dictionary scan or
-     * Android IPC is performed on the touch dispatch path. */
+    /**
+     * One decoder for every alphabetic layout and keyboard skin. English uses
+     * a preindexed SCOWL candidate window; Urdu and Sindhi use their bounded
+     * on-device regional word banks plus the user's explicitly learned words.
+     * Minor missed/extra samples are accepted without memorizing the raw path.
+     */
     fun glide(lang:Int,path:List<String>):String? {
-        if(lang!=0 || path.size<3)return null
-        val trace=path.map{it.lowercase(Locale.ROOT)}
-            .filter{it.length==1 && it[0] in 'a'..'z'}
-            .joinToString("")
+        if(lang !in 0..2 || path.size<3)return null
+        val trace=KeyPopGlideScoring.trace(path)
         if(trace.length<3)return null
+        if(lang!=0) {
+            val regional=(KeyPopTypingIntelligence.list(lang)+learned(lang))
+                .distinct()
+            return KeyPopGlideScoring.rank(path,regional,3).firstOrNull()
+        }
         val first=trace.first();val last=trace.last()
-        fun compact(text:String):String=buildString {
-            for(c in text)if(isEmpty()||last()!=c)append(c)
-        }
-        fun skipped(word:String):Int? {
-            val expected=compact(word)
-            if(expected.firstOrNull()!=first || expected.lastOrNull()!=last)return null
-            var pos=0
-            for(char in trace)if(pos<expected.length && char==expected[pos])pos++
-            return if(pos==expected.length)trace.length-expected.length else null
-        }
         val familiar=if(scowlReady)glideIndex[""+first+last].orEmpty()
             else emptyList()
-        val custom=words(lang).asSequence().filter {
-            it.length in 3..17 && it.firstOrNull()==first &&
+        val custom=words(0).asSequence().filter {
+            it.length in 3..24 && it.firstOrNull()==first &&
                 it.lastOrNull()==last
         }.map{RankedWord(it,10)}
-        return (familiar.asSequence()+custom)
-            .distinctBy{it.word}
-            .mapNotNull { item ->
-                val excess=skipped(item.word)?:return@mapNotNull null
-                val score=(if(item.tier<=10)120 else 65)-
-                    excess*17-kotlin.math.abs(item.word.length-trace.length)*3
-                item.word to score
-            }
-            .maxWithOrNull(compareBy<Pair<String,Int>>{it.second}
-                .thenByDescending{it.first.length})?.first
+        val pooled=(familiar.asSequence()+custom)
+            .distinctBy{it.word}.sortedWith(compareBy<RankedWord>{it.tier}
+                .thenBy{it.word.length}).take(3500).map{it.word}.toList()
+        return KeyPopGlideScoring.rank(path,pooled,3).firstOrNull()
+            ?:KeyPopGlideScoring.rank(path,KeyPopTypingIntelligence.list(0),3)
+                .firstOrNull()
     }
     private fun editDistanceAtMost2(a:String,b:String):Int {
         if(kotlin.math.abs(a.length-b.length)>2)return 3
