@@ -18,7 +18,8 @@ object KeyPopWritingTools {
             val before=output.toString()
             val target=match.value
             val context=before.dropLast(target.length)
-            val fixed=KeyPopTypingIntelligence.correction(0,target)
+            val fixed=KeyPopContractionRules.correction(target)
+                ?:KeyPopTypingIntelligence.correction(0,target)
                 ?:KeyPopShortWordRecovery.safeAutomatic(target,before)
             if(fixed!=null && fixed!=target) {
                 output.setLength(output.length-target.length)
