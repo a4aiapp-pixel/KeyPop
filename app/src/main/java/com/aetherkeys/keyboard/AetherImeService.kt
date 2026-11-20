@@ -2095,7 +2095,9 @@ class AetherImeService : InputMethodService() {
                     enhancedContext=useContext &&
                         prefs.getBoolean("enhancedContextPredictions",true))
                 val grammar=if(word.isNotEmpty() && !privateMode && showGrammar)
-                    KeyPopGrammarRules.suggest(before,predLang) else null
+                    KeyPopGrammarRules.suggest(before,predLang)
+                        ?:lexicon.precedingWordSuggestion(predLang,before,word)
+                    else null
                 KeyPopDiagnostics.observePredictionCompute(this,
                     SystemClock.elapsedRealtimeNanos()-start)
                 if(token!=predictionGeneration)return@execute
