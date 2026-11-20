@@ -211,6 +211,7 @@ class AetherImeService : InputMethodService() {
     private var current:LinearLayout?=null
     private var floatingShell:FrameLayout?=null
     private var characterStrip:KeyPopCharacterStrip?=null
+    private var glideTrailView:KeyPopGlideTrailView?=null
     private var liveBackground:KeyPopBackdropDrawable?=null
     private var themeAnimator:android.animation.ValueAnimator?=null
     private var lastThemeFrame=0L
@@ -394,6 +395,9 @@ class AetherImeService : InputMethodService() {
         val shell=floatingShell!!
         characterStrip=KeyPopCharacterStrip(this,shell)
         shell.addView(current,FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM))
+        glideTrailView=KeyPopGlideTrailView(this).also { overlay ->
+            shell.addView(overlay,FrameLayout.LayoutParams(-1,-1))
+        }
         ViewCompat.setOnApplyWindowInsetsListener(shell) { _,insets ->
             applyNavigationInsets(insets)
             insets
@@ -434,6 +438,7 @@ class AetherImeService : InputMethodService() {
     }
 
     override fun onFinishInputView(finishingInput:Boolean) {
+        glideTrailView?.clear()
         adaptiveEditorEpoch++
         adaptiveController.invalidateSession()
         inputViewActive=false
@@ -950,6 +955,7 @@ class AetherImeService : InputMethodService() {
 
     private fun draw() {
         val root=current ?: return
+        glideTrailView?.clear()
         refreshAutoShiftVisual()
         characterStrip?.dismiss()
         root.removeAllViews()
@@ -1673,9 +1679,16 @@ class AetherImeService : InputMethodService() {
                         val threshold=d(prefs.getInt("glideSensitivityDp",17).coerceIn(8,30))
                         if(delta>threshold) {
                             button.removeCallbacks(open)
-                            if(glideEnabled)gliding=true
+                            if(glideEnabled && !gliding) {
+                                gliding=true
+                                if(prefs.getBoolean("glideTrailVisible",true))
+                                    glideTrailView?.begin(downX,downY,palette().accent)
+                            }
                         }
-                        if(gliding)sampleTo(event.rawX,event.rawY)
+                        if(gliding) {
+                            sampleTo(event.rawX,event.rawY)
+                            glideTrailView?.point(event.rawX,event.rawY)
+                        }
                     }
                     true
                 }
@@ -1711,10 +1724,12 @@ class AetherImeService : InputMethodService() {
                             requestSuggestionRefresh()
                         } else press(label)
                     } else press(label)
+                    glideTrailView?.clear()
                     popup=false;hitBoxes=emptyList()
                     true
                 }
                 MotionEvent.ACTION_CANCEL -> {
+                    glideTrailView?.clear()
                     canceled=true;button.isPressed=false
                     button.removeCallbacks(open);characterStrip?.dismiss()
                     popup=false;hitBoxes=emptyList()
