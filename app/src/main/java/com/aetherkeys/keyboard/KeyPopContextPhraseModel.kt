@@ -9,6 +9,20 @@ object KeyPopContextPhraseModel {
     private val examples=mapOf(
         0 to listOf(
             "please check the latest version","please confirm the details",
+            // Multiword continuation examples cover ordinary status updates.
+            // Phrase indexing below learns overlapping 1-3 word contexts,
+            // so e.g. "keep me posted" works anywhere in the sentence.
+            "keep me posted on the progress","please keep me posted on the outcome",
+            "keep me posted on any changes","can you keep me posted on this",
+            "kindly keep me posted about the situation",
+            "keep us posted on the results","please keep us posted on the updates",
+            "keep them posted on the changes",
+            "keep me updated on the progress","please keep me updated on the status",
+            "keep us updated on the next steps","let me know about the progress",
+            "let me know when it is ready","keep me informed about any developments",
+            "keep me in the loop on this","please update me on the progress",
+            "keep an eye on the situation","looking forward to hearing from you",
+            "please follow up on the matter","i will keep you posted on the progress",
             "please share the final report","please review the document",
             "please find the attached document","please provide more information",
             "please let me know","please let us know",
