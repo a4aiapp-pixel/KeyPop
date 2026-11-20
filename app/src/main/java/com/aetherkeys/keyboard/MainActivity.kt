@@ -893,6 +893,14 @@ class MainActivity:Activity() {
             option(this,"Correct joined words (e.g. topredict → to predict)",
                 "correctMissingSpaces",true)
             option(this,"Auto-correct spelling","autoCorrect",true)
+            option(this,"Glide typing — swipe across letters (all layouts and themes)",
+                "glide",true)
+            range(this,"Glide activation distance","glideSensitivityDp",
+                8,30,17," dp")
+            addView(text("Slide a finger through letters to enter a word. Works in " +
+                "English, Urdu and Sindhi on all themes and compatible custom " +
+                "layouts. Toggle applies immediately without restarting KeyPop. " +
+                "Glide is disabled in passwords, email, URL and numeric fields.",12f,muted))
             option(this,"Grammar-aware suggestions","contextPredictions",true)
             option(this,"Grammar hints (suggest only)","grammarHints",true)
             option(this,"Apply high-confidence grammar fixes on Space",
