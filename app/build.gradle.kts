@@ -20,8 +20,8 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // RC42 stablev2 was built using a CI run counter. RC43 uses a much
         // higher floor to guarantee one-way in-place upgrade on Android.
-        versionCode = 100000 + (System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 0)
-        versionName = "1.0.52-rc52-linguistic-autocorrect"
+        versionCode = 110000 + (System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 0)
+        versionName = "1.0.53-rc53-contextual-language-quality"
     }
     splits {
         abi {
@@ -44,7 +44,7 @@ android {
         debug {
             // Debug builds retain an ephemeral test-only signature and their
             // OWN app identity. Never distribute them as an upgrade path.
-            applicationIdSuffix = ".rc52preview"
+            applicationIdSuffix = ".rc53preview"
             versionNameSuffix = "-debug-test-only"
         }
         release {
