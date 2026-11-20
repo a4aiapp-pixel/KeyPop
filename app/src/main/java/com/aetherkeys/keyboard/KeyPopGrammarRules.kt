@@ -76,6 +76,22 @@ object KeyPopGrammarRules {
         // Single-token contractions are genuine grammar improvements too:
         // "im" and "Im" -> "I'm", but intentional "IM" stays untouched.
         val lastWord=Regex("[A-Za-z]+$").find(text)?.value.orEmpty()
+        // Apply subject agreement *before* a generic single-word contraction.
+        // Otherwise "we doesnt" becomes the incorrect "we doesn't" instead
+        // of "we don't". This frame also covers arbitrary prefixes/subjects.
+        val negative=Regex("(?i)\\b(i|we|you|they|he|she|it)\\s+(dont|doesnt|doesn't)$")
+            .find(text)
+        if(negative!=null && negative.range.last==text.lastIndex) {
+            val subject=negative.groupValues[1]
+            val suffix=negative.groupValues[2].lowercase()
+            val correct=if(subject.lowercase() in setOf("i","we","you","they"))
+                "don't" else "doesn't"
+            if(suffix!=correct) {
+                val name=if(subject.equals("i",true))"I" else subject
+                val phrase=name+" "+correct
+                return KeyPopGrammarFix("Fix: "+phrase,negative.value.length,phrase,true)
+            }
+        }
         KeyPopContractionRules.correction(lastWord)?.let { replacement ->
             return KeyPopGrammarFix("Fix: "+replacement,
                 lastWord.length,replacement,true)
