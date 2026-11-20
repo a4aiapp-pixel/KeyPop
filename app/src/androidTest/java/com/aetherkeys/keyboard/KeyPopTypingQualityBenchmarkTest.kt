@@ -147,10 +147,15 @@ class KeyPopTypingQualityBenchmarkTest {
             val offers=next(context)
             timings.add(SystemClock.elapsedRealtimeNanos()-start)
             if(offers.firstOrNull() in acceptable)top1++
+            else misses.add("TOP1:"+context.trim()+
+                " => predicted="+offers.take(3).joinToString(",")+
+                " / accepted="+acceptable.joinToString(","))
             if(offers.take(3).any{it in acceptable})top3++
-            else misses.add(context.trim())
+            else misses.add("TOP3:"+context.trim())
         }
         record("NEXT_HOLDOUT",cases.size,top1,top3,misses,timings)
+        assertTrue("Next-word recall cannot be faked by revising labels",
+            top3<=cases.size && top1<=top3)
     }
 
     @Test fun grammarReportsTrueCorrectionsAndFalseEditsSeparately() {
