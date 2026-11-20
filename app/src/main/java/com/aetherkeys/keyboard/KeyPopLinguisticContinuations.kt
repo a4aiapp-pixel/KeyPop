@@ -42,7 +42,7 @@ object KeyPopLinguisticContinuations {
             // "Keep me posted" and "keep the team posted" use the same
             // prepositional frame, regardless of the exact subject or style.
             last=="posted" &&
-                (thirdLast in communicate && beforeLast in recipients ||
+                (thirdLast in communicate && beforeLast!=null ||
                     fourthLast in communicate &&
                     thirdLast in setOf("my","our","the","your") ||
                     h.takeLast(4).any{it in communicate} &&
