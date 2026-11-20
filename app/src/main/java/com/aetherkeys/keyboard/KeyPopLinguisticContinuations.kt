@@ -59,11 +59,18 @@ object KeyPopLinguisticContinuations {
                     h.takeLast(4).any{it in recipients}) ->
                 listOf("on" to 525,"about" to 495,"regarding" to 480)
 
-            last in setOf("updated","informed") &&
+            last=="informed" &&
                 (thirdLast in communicate || h.takeLast(4).any {
                     it in communicate || it in informVerbs
                 }) ->
-                listOf("on" to 470,"about" to 465,"regarding" to 450)
+                listOf("about" to 525,"of" to 490,"regarding" to 480,
+                    "on" to 460)
+
+            last=="updated" &&
+                (thirdLast in communicate || h.takeLast(4).any {
+                    it in communicate || it in updateVerbs
+                }) ->
+                listOf("on" to 500,"about" to 475,"regarding" to 462)
 
             last in recipients && beforeLast in updateVerbs ->
                 listOf("on" to 500,"about" to 480,"regarding" to 465)
@@ -90,8 +97,13 @@ object KeyPopLinguisticContinuations {
             // depend on word classes and auxiliary position, not one exact
             // memorized full sentence.
             last=="could" && beforeLast in setOf("you","we","i","they") ->
-                listOf("please" to 488,"be" to 455,"help" to 445,
+                listOf("please" to 608,"be" to 455,"help" to 445,
                     "send" to 437,"provide" to 430)
+
+            last=="please" && beforeLast in setOf("you","we","they",
+                    "he","she") ->
+                listOf("check" to 600,"send" to 580,
+                    "confirm" to 570,"help" to 555,"review" to 545)
 
             last in setOf("remains","remain") ->
                 listOf("open" to 476,"unclear" to 470,"ongoing" to 465,
