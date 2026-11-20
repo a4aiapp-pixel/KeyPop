@@ -88,12 +88,11 @@ object KeyPopFuzzyRanker {
         val twoEditMargin=if(aggressive)75 else 115
         return when {
             best.tier>20 ->null
-            // The old >=380 gate could not be met by ordinary one-edit
-            // candidate scores (typically 300-361). Short unknown names
-            // remain protected by a 5-letter minimum and tier-10 constraint.
+            // A singleton is not enough: the indexed search may have
+            // missed a plausible competing word or a personal name.
+            // Strong contextual evidence is required for automatic edits.
             runnerUp==null && best.distance==1 &&
-                best.tier<=10 && best.score>=316 &&
-                best.word.length>=5 ->best.word
+                best.tier<=10 && best.score>=380 ->best.word
             runnerUp==null ->null
             best.distance==1 && best.score>=300 &&
                 margin>=oneEditMargin ->best.word
