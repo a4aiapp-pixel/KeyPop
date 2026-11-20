@@ -85,6 +85,8 @@ object KeyPopPredictionContext {
         if(candidate.isBlank())return candidate
         val lower=candidate.lowercase(Locale.ROOT)
         if(lower=="i")return "I"
+        if(lower.startsWith("i'") || lower.startsWith("i’"))
+            return "I"+lower.drop(1)
         if(candidate.any{it.code>127})return candidate
         if(typed.isNotEmpty()) {
             if(typed.length>1 && typed.all{!it.isLetter()||it.isUpperCase()})
