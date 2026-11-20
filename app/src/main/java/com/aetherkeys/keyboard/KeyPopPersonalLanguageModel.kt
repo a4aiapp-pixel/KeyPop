@@ -102,6 +102,9 @@ class KeyPopPersonalLanguageModel(context:Context) {
     private var feedbackPresent:Boolean?=null
     private var cachedContextKey:String?=null
     private var cachedWords:List<String> = emptyList()
+    // Distinguish a verified 2/3-word personal context from a fallback
+    // globally frequent word. Only the former may outrank strong grammar.
+    private var cachedStrongWords:List<String> = emptyList()
     private val tokenize=Regex("[\\p{L}\\p{M}]+(?:['’][\\p{L}\\p{M}]+)*")
     private fun normalize(value:String):String=KeyPopUnicodeWords.normalize(value)
     private fun words(text:String):List<String> =
@@ -187,14 +190,19 @@ class KeyPopPersonalLanguageModel(context:Context) {
         val cacheKey="$language|"+searchContexts.joinToString("|")
         if(cacheKey!=cachedContextKey) {
             val collected=LinkedHashSet<String>()
+            val strong=LinkedHashSet<String>()
             for(context in searchContexts) {
+                val strongContext=context.count{it=='|'}>=2
                 val id=signature(context)
                 helper.readableDatabase.query("next_words",arrayOf("cipher"),
                     "context_id=?",arrayOf(id),null,null,"uses DESC, last_seen DESC",
                     "16").use { cursor->
                     while(cursor.moveToNext() && collected.size<36) {
                         runCatching{open(cursor.getBlob(0))}.getOrNull()
-                            ?.let{collected.add(it)}
+                            ?.let{
+                                collected.add(it)
+                                if(strongContext)strong.add(it)
+                            }
                     }
                 }
                 if(collected.size>=36)break
@@ -210,6 +218,7 @@ class KeyPopPersonalLanguageModel(context:Context) {
                 }
             }
             cachedWords=collected.toList()
+            cachedStrongWords=strong.toList()
             cachedContextKey=cacheKey
         }
         return cachedWords.asSequence()
@@ -223,10 +232,25 @@ class KeyPopPersonalLanguageModel(context:Context) {
             }
             .take(limit.coerceIn(1,8)).toList()
     }
+    /** Strong personalization requires two or more exact preceding words.
+     * A globally popular personal word cannot displace grammar in an
+     * unrelated new sentence. Reuses the normal query cache and AES model. */
+    @Synchronized fun strongCandidates(language:Int,before:String,
+                                fragment:String="",limit:Int=5):Set<String> {
+        candidates(language,before,fragment,limit)
+        val stem=normalize(fragment)
+        return cachedStrongWords.asSequence()
+            .filter{it!=stem && (it.startsWith(stem) ||
+                (stem.length>=4 && KeyPopTypingIntelligence.oneEditAway(
+                    stem,it.take(stem.length))))}
+            .take(limit.coerceIn(1,8)).toSet()
+    }
+
     /** Drop decrypted autocomplete fragments when the editor session ends. */
     @Synchronized fun dropCandidateCache() {
         cachedContextKey=null
         cachedWords=emptyList()
+        cachedStrongWords=emptyList()
     }
     /** Optional one-time import from the user's already saved, encrypted
      * TEXT clipboard archive. Explicit UI consent is required. Only short,
