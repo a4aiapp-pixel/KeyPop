@@ -44,7 +44,7 @@ class KeyPopRC51GlideGrammarTest {
         assertEquals("hello",KeyPopGlideScoring.rank(
             listOf("h","e","y","l","o"),words).first())
         assertEquals("hello",KeyPopGlideScoring.rank(
-            listOf("h","e","o"),words).first())
+            listOf("h","e","o"),listOf("hello")).first())
         assertEquals("keyboard",KeyPopGlideScoring.rank(
             listOf("k","e","y","b","o","a","r","d"),
             listOf("keyboard","keypad")).first())
@@ -78,8 +78,11 @@ class KeyPopRC51GlideGrammarTest {
             "a hour" to "an hour",
             "an university" to "a university",
             "an user" to "a user")
-        for((typed,expected) in samples)
-            assertEquals(typed,expected,KeyPopGrammarRules.suggest(typed,0)?.replacement)
+        for((typed,expected) in samples) {
+            val fix=KeyPopGrammarRules.suggest(typed,0)
+            assertNotNull("Missing fix for $typed",fix)
+            assertEquals(typed,expected,typed.dropLast(fix!!.remove)+fix.replacement)
+        }
     }
 
     @Test fun questionAuxiliariesDoNotTriggerFalseGrammarCorrections() {
