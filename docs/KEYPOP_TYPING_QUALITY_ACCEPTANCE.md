@@ -34,11 +34,11 @@
 
 ## Next-word accuracy: measured baseline versus desired target
 
-- **Verified RC52 engine baseline:** next-word top-1 **12/24 = 50.0%**; top-3 **19/24 = 79.2%**, on the original small fixed Android emulator corpus. These figures are *not* 99%, and are not Chrome/WhatsApp or Gboard measurements.
-- **99% is an aspirational target, not a currently measured result or a defensible guarantee across open-ended language.** Everyday sentences often have several equally natural continuations. The evaluation must predeclare acceptable alternatives and measure both top-1 quality and top-3 recall on a substantially larger, independently curated and blinded corpus.
+- **Verified RC52 engine baseline:** next-word top-1 **12/24 = 50.0%**; top-3 **19/24 = 79.2%**, on the original small fixed Android emulator corpus. These figures are *not* 100%, and are not Chrome/WhatsApp or Gboard measurements.
+- **100% is the aspirational quality target, not a currently measured result or a defensible guarantee across open-ended language.** Everyday sentences often have several equally natural continuations. The evaluation must predeclare acceptable alternatives and measure both top-1 quality and top-3 recall on a substantially larger, independently curated and blinded corpus.
 - **No training on benchmark cases.** Do not add those prompts, their exact expected continuations or other evaluation-only strings to the production phrase bank to manufacture accuracy. Improvements must generalize to unseen contexts and pass false-positive and latency checks.
 - **Diagnostic requirement:** report wrong top-1 choices and their top-three alternatives for every failed case. Correct context retrieval, agreement, ranking and personalized weighting as *classes*, not as individual lookups.
-- **Release gate:** never claim 99% next-word accuracy unless independently collected real-app evidence meets or exceeds it on a meaningful blinded corpus with an appropriate confidence interval; always publish the measured denominator, keyboard configuration and acceptable-word labeling method.
+- **Release gate:** target 100% correct top-1 and top-3 outcomes on a separately maintained, representative, blinded acceptance corpus (using predefined linguistically valid continuations) and zero unintended modifications to valid or sensitive text. Never claim 100% next-word accuracy without actual independently collected real-app evidence meeting that target; always publish the measured denominator, keyboard configuration, acceptable-word labeling method and confidence interval.
 
 ## Scoring definitions
 
