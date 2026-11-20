@@ -2094,7 +2094,7 @@ class AetherImeService : InputMethodService() {
                     personal,dictionary,safeSpelling,feedback,8,
                     enhancedContext=useContext &&
                         prefs.getBoolean("enhancedContextPredictions",true))
-                val grammar=if(word.isNotEmpty() && !privateMode && showGrammar)
+                val grammar=if(word.isNotEmpty() && !sensitive(info) && showGrammar)
                     KeyPopGrammarRules.suggest(before,predLang)
                         ?:lexicon.precedingWordSuggestion(predLang,before,word)
                     else null
@@ -2570,7 +2570,9 @@ class AetherImeService : InputMethodService() {
                         val predLang=language
                         val inputType=currentInputEditorInfo?.inputType?:0
                         val corrected=if(KeyPopTypingRules.autocorrectEnabled(
-                                prefs.getBoolean("autoCorrect",true),inputType)) {
+                                prefs.getBoolean("autoCorrect",true),inputType,
+                                currentInputEditorInfo?.imeOptions?:0,
+                                prefs.getBoolean("autoCorrectSearchQueries",true))) {
                             // Only precomputed spelling or fixed verified typos
                             // are allowed here. Dictionary scans stay off UI.
                             val cached=latestSpaceAdvice?.takeIf {
@@ -2588,7 +2590,9 @@ class AetherImeService : InputMethodService() {
                         // auto-grammar has its own setting and respects autocorrect off.
                         val grammar=if(prefs.getBoolean("autoGrammarApply",true) &&
                             KeyPopTypingRules.autocorrectEnabled(
-                                prefs.getBoolean("autoCorrect",true),inputType) &&
+                                prefs.getBoolean("autoCorrect",true),inputType,
+                                currentInputEditorInfo?.imeOptions?:0,
+                                prefs.getBoolean("autoCorrectSearchQueries",true)) &&
                             prefs.getBoolean("grammarHints",true))
                             latestSpaceAdvice?.takeIf {
                                 it.language==predLang && it.before.takeLast(48)==before
