@@ -225,6 +225,14 @@ object KeyPopContextPhraseModel {
                     output[word]=Candidate(word,score,depth)
             }
         }
+        // General linguistic frames complement the fixed cold-start
+        // examples.  This generates alternatives for previously unseen
+        // subjects and objects (e.g. "keep our team posted") while leaving
+        // personalization to the encrypted on-device model.
+        for(item in KeyPopLinguisticContinuations.ranked(language,before,fragment)) {
+            if(item.score>(output[item.word]?.score?:0))
+                output[item.word]=Candidate(item.word,item.score,3)
+        }
         return output.values.sortedWith(compareByDescending<Candidate>{it.score}
             .thenBy{it.word}).take(limit.coerceIn(1,24))
     }
