@@ -294,6 +294,9 @@ class KeyPopLexicon(context:Context) {
             else fuzzy.take(3)+completions
         return (listOfNotNull(if(lang==0)
                 KeyPopContractionRules.correction(fragment) else null)+
+            (if(lang==0 && !originalKnown && scowlReady)
+                KeyPopMorphologicalRecovery.suggestions(normalized,::isKnownEnglish,4)
+            else emptyList())+
             (if(lang==0 && !originalKnown)
                 KeyPopShortWordRecovery.suggestions(fragment,beforeCursor,4)
             else emptyList())+
