@@ -102,7 +102,7 @@ class KeyPopLexicon(context:Context) {
      */
     private fun fuzzyCandidates(typed:String):Sequence<Pair<String,Int>> {
         val input=typed.lowercase(Locale.ROOT)
-        if(!scowlReady || input.length !in 4..22 ||
+        if(!scowlReady || input.length !in 3..22 ||
             !input.all{it in 'a'..'z'})return emptySequence()
         val keys=linkedSetOf(input.take(2),""+input[1]+input[0])
         for(letter in nearby(input[0]))keys.add(""+letter+input[1])
@@ -265,7 +265,9 @@ class KeyPopLexicon(context:Context) {
         val ordered=if(exact.isNotEmpty())
             exact.take(2)+fuzzy.take(3)+completions
             else fuzzy.take(3)+completions
-        return ((if(lang==0)
+        return (listOfNotNull(if(lang==0)
+                KeyPopContractionRules.correction(fragment) else null)+
+            (if(lang==0)
                 KeyPopShortWordRecovery.suggestions(fragment,beforeCursor,4)
             else emptyList())+
             listOfNotNull(if(lang==0)digitSlipCorrection(fragment) else null)+
@@ -286,6 +288,7 @@ class KeyPopLexicon(context:Context) {
         if(lang!=0)return null
         val normalized=word.lowercase(Locale.ROOT)
         if(normalized in store.getStringSet("manual_0",emptySet()).orEmpty())return null
+        KeyPopContractionRules.correction(word)?.let{return it}
         return KeyPopShortWordRecovery.safeAutomatic(normalized,beforeCursor)
             ?: digitSlipCorrection(normalized)
             ?:if(normalized=="topredict")"to predict"
@@ -297,6 +300,7 @@ class KeyPopLexicon(context:Context) {
         val normalized=word.trim().lowercase(Locale.ROOT)
         if(lang!=0 || normalized.length !in 2..22)return null
         if(normalized in store.getStringSet("manual_0",emptySet()).orEmpty())return null
+        KeyPopContractionRules.correction(word)?.let{return it}
         KeyPopShortWordRecovery.suggestions(normalized,beforeCursor).firstOrNull()
             ?.let{return it}
         digitSlipCorrection(normalized)?.let{return it}
@@ -313,6 +317,7 @@ class KeyPopLexicon(context:Context) {
         if(allowPersonal && normalized in store.getStringSet("manual_"+lang,emptySet()).orEmpty())
             return null
         val base=when(lang){1->urdu;2->sindhi;else->english}
+        if(lang==0)KeyPopContractionRules.correction(word)?.let{return it}
         if(normalized in base)return null
         if(lang==0)KeyPopShortWordRecovery.safeAutomatic(normalized,beforeCursor)
             ?.let{return it}
@@ -329,6 +334,41 @@ class KeyPopLexicon(context:Context) {
             rankedFuzzy(normalized,beforeCursor,cache=allowPersonal),
             prefs.getBoolean("aggressivePredictions",true))
     }
+    /**
+     * Recover a misspelled preceding word even after the next word has begun.
+     * Only returns a manually selectable phrase fix, never a silent edit.
+     * The exact editor suffix and selection must be revalidated by the IME.
+     */
+    fun precedingWordSuggestion(lang:Int,before:String,current:String):KeyPopGrammarFix? {
+        if(lang!=0 || current.length !in 2..24 || !before.endsWith(current))
+            return null
+        val earlier=before.dropLast(current.length)
+        val match=Regex("([A-Za-z]{4,22})([ \t]+)$").find(earlier)?:return null
+        val previous=match.groupValues[1]
+        val gap=match.groupValues[2]
+        val lowercase=previous.lowercase(Locale.ROOT)
+        if(previous.length>1 && previous.all(Char::isUpperCase) ||
+            lowercase in store.getStringSet("manual_0",emptySet()).orEmpty() ||
+            isKnownEnglish(lowercase))return null
+        val prefix=earlier.substring(0,match.range.first)
+        val known=KeyPopTypingIntelligence.correction(0,lowercase)
+        val best=if(known!=null)known else {
+            val scored=rankedFuzzy(lowercase,prefix)
+            val first=scored.firstOrNull()?:return null
+            if(first.distance!=1 || first.tier>20 || first.score<285)
+                return null
+            first.word
+        }
+        val corrected=if(best.lowercase(Locale.ROOT) in setOf(
+                "google","samsung","microsoft","whatsapp","android"))
+            best.replaceFirstChar(Char::uppercase)
+            else KeyPopPredictionContext.wordCase(best,previous,prefix)
+        if(corrected.equals(previous,ignoreCase=true))return null
+        val replacement=corrected+gap+current
+        return KeyPopGrammarFix("Spelling: "+replacement,
+            previous.length+gap.length+current.length,replacement,false)
+    }
+
     /**
      * One decoder for every alphabetic layout and keyboard skin. English uses
      * a preindexed SCOWL candidate window; Urdu and Sindhi use their bounded
