@@ -13,7 +13,8 @@ object KeyPopUnifiedPrediction {
     fun rank(language:Int,typed:String,before:String,personal:List<String>,
              dictionary:List<String>,correction:String?=null,
              rejected:Map<String,Int> = emptyMap(),limit:Int=8,
-             enhancedContext:Boolean=true):List<String> {
+             enhancedContext:Boolean=true,
+             strongPersonal:Set<String> = emptySet()):List<String> {
         val input=KeyPopUnicodeWords.normalize(typed)
         val contextual=if(enhancedContext)
             KeyPopContextPhraseModel.ranked(language,before,typed,20) else emptyList()
@@ -57,6 +58,10 @@ object KeyPopUnifiedPrediction {
                 else->180
             }
             if(name in personalized)score+=if(input.isEmpty())230 else 75
+            // A 2/3-word encrypted personal match is genuinely specific.
+            // Do not grant this boost to globally common personal words:
+            // doing so would corrupt unrelated grammatical predictions.
+            if(input.isEmpty() && name in strongPersonal)score+=420
             if(name in dictionary)score+=18
             score+=grammar+agreement
             score+=contextScores[name]?:0
