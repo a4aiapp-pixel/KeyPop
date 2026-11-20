@@ -2735,14 +2735,20 @@ class AetherImeService : InputMethodService() {
             textSize=12f;setTextColor(skin.ink)
             setPadding(0,d(4),0,d(5))
         })
-        val modes=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
-        listOf("Formal","Polite","Concise","Punctuate").forEach { mode->
-            modes.addView(chip(if(writingMode==mode)"✓ "+mode else mode) {
-                writingMode=mode
-                writingPreview=KeyPopWritingTools.rewrite(writingSource,mode,language)
-                draw()
-            },LinearLayout.LayoutParams(0,d(37),1f).apply{rightMargin=d(3)})
-        }
+        val modes=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL}
+        listOf("Proofread","Formal","Polite","Concise","Punctuate")
+            .chunked(3).forEach { choices ->
+                val row=LinearLayout(this).apply {orientation=LinearLayout.HORIZONTAL}
+                choices.forEach { mode ->
+                    row.addView(chip(if(writingMode==mode)"✓ "+mode else mode) {
+                        writingMode=mode
+                        writingPreview=KeyPopWritingTools.rewrite(writingSource,mode,language)
+                        draw()
+                    },LinearLayout.LayoutParams(0,d(37),1f).apply{
+                        rightMargin=d(3)})
+                }
+                modes.addView(row,LinearLayout.LayoutParams(-1,d(40)))
+            }
         panel.addView(modes)
         if(writingPreview.isBlank() && writingSource.isNotBlank())
             writingPreview=KeyPopWritingTools.rewrite(writingSource,writingMode,language)
