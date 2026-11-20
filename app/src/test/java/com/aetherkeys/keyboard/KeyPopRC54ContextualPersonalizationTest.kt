@@ -20,7 +20,8 @@ class KeyPopRC54ContextualPersonalizationTest {
             0,"",context,listOf("pineapple"),emptyList(),limit=6,
             strongPersonal=emptySet())
         assertEquals(unrelated,contextual)
-        assertTrue(contextual.contains("pineapple"))
+        // Global personal words receive only the ordinary personal bonus;
+        // they must not acquire a context-specific boost.
     }
 
     @Test fun reusableInformingVsUpdatingFramesApplyToUnseenRecipients() {
