@@ -64,6 +64,7 @@ class AetherImeService : InputMethodService() {
     private val suggestionPrefsListener=SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if(inputViewActive && suggestionBar!=null) {
             when {
+                key=="glide" -> draw()
                 key=="autoCap" || key=="autoCapSentences" -> {
                     updateShiftKeys()
                     requestSuggestionRefresh()
@@ -1451,8 +1452,12 @@ class AetherImeService : InputMethodService() {
                 true
             }
             if(label=="⌫")installRepeatingBackspace(button)
-            val glidable=!symbols && language==0 && label.length==1 &&
-                label[0].isLetter() && prefs.getBoolean("glide",false)
+            val glidable=KeyPopGlidePolicy.enabled(
+                prefs.getBoolean("glide",true),
+                if(language!=0 && prefs.getBoolean("romanMode",false))0 else language,
+                label,symbols,numeric(currentInputEditorInfo),
+                sensitive(currentInputEditorInfo),currentInputEditorInfo?.inputType?:0) &&
+                !hasSelectedRange
             if(variants.isNotEmpty() || glidable)
                 installCharacterGesture(button,label,variants,glidable)
             button.contentDescription=when(label) {
@@ -1604,12 +1609,37 @@ class AetherImeService : InputMethodService() {
         }
     }
 
-    /** Shows alternates while held and permits sliding without releasing the key. */
+    /**
+     * Per-key drag capture. Sample between MOVE events so a quick glide can
+     * traverse keys without Android delivering one callback per key. Cache hit
+     * rectangles once on DOWN; no search, disk I/O or model load on MOVE.
+     * Long-press alternatives remain unchanged when the finger stays still.
+     */
     private fun installCharacterGesture(button:Button,label:String,variants:List<String>,
                                         glideEnabled:Boolean) {
         var downX=0f;var downY=0f
+        var lastX=0f;var lastY=0f
         var canceled=false;var popup=false;var gliding=false
-        val trail=ArrayList<String>()
+        val trail=ArrayList<String>(28)
+        var hitBoxes=emptyList<Pair<Rect,String>>()
+        fun remember(x:Float,y:Float) {
+            for((rect,letter) in hitBoxes) {
+                if(rect.contains(x.toInt(),y.toInt())) {
+                    if(trail.lastOrNull()!=letter && trail.size<100)trail.add(letter)
+                    break
+                }
+            }
+        }
+        fun sampleTo(x:Float,y:Float) {
+            val distance=kotlin.math.hypot((x-lastX).toDouble(),
+                (y-lastY).toDouble())
+            val steps=(distance/d(9).coerceAtLeast(1)).toInt().coerceIn(1,28)
+            for(i in 1..steps) {
+                val t=i.toFloat()/steps
+                remember(lastX+(x-lastX)*t,lastY+(y-lastY)*t)
+            }
+            lastX=x;lastY=y
+        }
         val open=Runnable {
             if(!canceled && !gliding && variants.isNotEmpty() && button.isAttachedToWindow) {
                 characterStrip?.show(button,variants,palette().accent,palette().ink,palette().surface)
@@ -1617,36 +1647,35 @@ class AetherImeService : InputMethodService() {
                 if(popup)tapFeedback(button)
             }
         }
-        button.setOnTouchListener { _,event->
+        button.setOnTouchListener { _,event ->
             when(event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     canceled=false;popup=false;gliding=false
                     downX=event.rawX;downY=event.rawY
+                    lastX=downX;lastY=downY
                     trail.clear();trail.add(label)
+                    hitBoxes=if(glideEnabled)keyViews.mapNotNull { (key,letter) ->
+                        if(letter.codePointCount(0,letter.length)!=1 ||
+                            !letter.codePoints().allMatch{Character.isLetter(it)})
+                            return@mapNotNull null
+                        val rect=Rect()
+                        if(key.getGlobalVisibleRect(rect))rect to letter else null
+                    } else emptyList()
                     button.isPressed=true
                     button.postDelayed(open,390L)
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    if(popup) characterStrip?.slide(event.rawX)
+                    if(popup)characterStrip?.slide(event.rawX)
                     else {
                         val delta=kotlin.math.abs(event.rawX-downX)+
                             kotlin.math.abs(event.rawY-downY)
-                        if(delta>d(17)) {
+                        val threshold=d(prefs.getInt("glideSensitivityDp",17).coerceIn(8,30))
+                        if(delta>threshold) {
                             button.removeCallbacks(open)
                             if(glideEnabled)gliding=true
                         }
-                        if(gliding) {
-                            val rect=Rect()
-                            for((key,letter) in keyViews) {
-                                if(letter.length==1 && letter[0].isLetter()
-                                    && key.getGlobalVisibleRect(rect)
-                                    && rect.contains(event.rawX.toInt(),event.rawY.toInt())) {
-                                    if(trail.lastOrNull()!=letter)trail.add(letter)
-                                    break
-                                }
-                            }
-                        }
+                        if(gliding)sampleTo(event.rawX,event.rawY)
                     }
                     true
                 }
@@ -1658,20 +1687,38 @@ class AetherImeService : InputMethodService() {
                     if(selected!=null) {
                         currentInputConnection?.commitText(selected,1)
                         refreshSuggestions()
-                    } else if(gliding && trail.size>=3) {
-                        val suggested=lexicon.glide(0,trail)
-                        if(suggested!=null) {
-                            currentInputConnection?.commitText(suggested+" ",1)
-                            learnAsync(0,suggested);refreshSuggestions()
+                    } else if(gliding && glideEnabled && !hasSelectedRange &&
+                        !sensitive(currentInputEditorInfo)) {
+                        sampleTo(event.rawX,event.rawY)
+                        val decoderLanguage=if(language!=0 &&
+                            prefs.getBoolean("romanMode",false))0 else language
+                        val suggested=lexicon.glide(decoderLanguage,trail)
+                        val connection=currentInputConnection
+                        if(suggested!=null && connection!=null) {
+                            val context=runCatching{connection.getTextBeforeCursor(96,0)
+                                ?.toString().orEmpty()}.getOrDefault("")
+                            val committed=KeyPopPredictionContext.wordCase(
+                                suggested,"",context)+" "
+                            editorContext.committed(committed)
+                            if(connection.commitText(committed,1)!=true)
+                                editorContext.clear()
+                            else {
+                                learnAsync(decoderLanguage,suggested)
+                                learnPersonalAsync(decoderLanguage,context,suggested)
+                            }
+                            autoCapSuppressed=false
+                            updateShiftKeys()
+                            requestSuggestionRefresh()
                         } else press(label)
                     } else press(label)
-                    popup=false
+                    popup=false;hitBoxes=emptyList()
                     true
                 }
-                MotionEvent.ACTION_CANCEL ->{
+                MotionEvent.ACTION_CANCEL -> {
                     canceled=true;button.isPressed=false
                     button.removeCallbacks(open);characterStrip?.dismiss()
-                    popup=false;true
+                    popup=false;hitBoxes=emptyList()
+                    true
                 }
                 else ->false
             }
