@@ -895,6 +895,7 @@ class MainActivity:Activity() {
             option(this,"Auto-correct spelling","autoCorrect",true)
             option(this,"Glide typing — swipe across letters (all layouts and themes)",
                 "glide",true)
+            option(this,"Show colored glide trail","glideTrailVisible",true)
             range(this,"Glide activation distance","glideSensitivityDp",
                 8,30,17," dp")
             addView(text("Slide a finger through letters to enter a word. Works in " +
