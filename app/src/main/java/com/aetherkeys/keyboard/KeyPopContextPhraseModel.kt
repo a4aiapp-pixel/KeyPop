@@ -210,7 +210,13 @@ object KeyPopContextPhraseModel {
         val stem=KeyPopUnicodeWords.normalize(fragment)
         val previous=if(stem.isNotEmpty() && before.endsWith(fragment,ignoreCase=true))
             before.dropLast(fragment.length) else before
-        val history=KeyPopUnicodeWords.tokens(previous.takeLast(200),32).takeLast(3)
+        val recent=previous.takeLast(200)
+        val lastBoundary=recent.indexOfLast { it in ".!?؟۔\\n" }
+        // A sentence boundary invalidates its old grammatical frame.
+        // A new message starts with generic or personally learned priors,
+        // not a stale continuation such as "posted on" after a full stop.
+        val clause=recent.substring(lastBoundary+1)
+        val history=KeyPopUnicodeWords.tokens(clause,32).takeLast(3)
         if(history.isEmpty())return emptyList()
         val transitions=bank[language].orEmpty()
         val output=LinkedHashMap<String,Candidate>()
