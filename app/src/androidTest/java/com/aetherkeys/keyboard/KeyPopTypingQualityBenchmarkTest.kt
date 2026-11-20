@@ -215,7 +215,7 @@ class KeyPopTypingQualityBenchmarkTest {
     @Test fun encryptedPersonalLearningHasMeasuredBeforeAndAfterGain() {
         val ctx=instrument.targetContext
         assertTrue("Personal benchmark requires isolated debug package",
-            ctx.packageName.endsWith(".rc52preview"))
+            ctx.packageName.endsWith(".rc53preview"))
         val prefs=ctx.getSharedPreferences("keypop",android.content.Context.MODE_PRIVATE)
         val originalLearn=prefs.all["learningEnabled"]
         val originalPersonal=prefs.all["personalHistoryLearning"]
