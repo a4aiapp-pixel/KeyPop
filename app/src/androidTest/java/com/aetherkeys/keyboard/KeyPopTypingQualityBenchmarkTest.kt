@@ -215,7 +215,7 @@ class KeyPopTypingQualityBenchmarkTest {
     @Test fun encryptedPersonalLearningHasMeasuredBeforeAndAfterGain() {
         val ctx=instrument.targetContext
         assertTrue("Personal benchmark requires isolated debug package",
-            ctx.packageName.endsWith(".rc53preview"))
+            ctx.packageName.endsWith(".rc54preview"))
         val prefs=ctx.getSharedPreferences("keypop",android.content.Context.MODE_PRIVATE)
         val originalLearn=prefs.all["learningEnabled"]
         val originalPersonal=prefs.all["personalHistoryLearning"]
@@ -248,9 +248,10 @@ class KeyPopTypingQualityBenchmarkTest {
         fun offers(context:String):List<String> {
             val recent=KeyPopUnicodeWords.tokens(context).lastOrNull().orEmpty()
             val personal=model.candidates(0,context,"",8)
+            val strong=model.strongCandidates(0,context,"",8)
             val dictionary=lexicon.nextWords(0,recent,context)
             return KeyPopUnifiedPrediction.rank(0,"",context,personal,
-                dictionary,limit=8).map(::normal)
+                dictionary,limit=8,strongPersonal=strong).map(::normal)
         }
         try {
             model.clear()
