@@ -893,6 +893,8 @@ class MainActivity:Activity() {
             option(this,"Correct joined words (e.g. topredict → to predict)",
                 "correctMissingSpaces",true)
             option(this,"Auto-correct spelling","autoCorrect",true)
+            option(this,"Correct ordinary browser searches, never URLs",
+                "autoCorrectSearchQueries",true)
             option(this,"Glide typing — swipe across letters (all layouts and themes)",
                 "glide",true)
             option(this,"Show colored glide trail","glideTrailVisible",true)
