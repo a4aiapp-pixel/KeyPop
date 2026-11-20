@@ -17,6 +17,10 @@ class KeyPopLexicon(context:Context) {
     // Common-word deletion index recovers missing leading letters without
     // scanning all 39,000 SCOWL forms on every keystroke.
     private val deleteIndex=HashMap<String,MutableList<RankedWord>>()
+    // Bounded orthographic 3-gram index recovers errors that alter both
+    // initial letters, where prefix buckets cannot find the intended word.
+    // Built once on the background warmup worker, never on the key UI thread.
+    private val middleGramIndex=HashMap<String,MutableList<RankedWord>>()
     private val glideIndex=HashMap<String,MutableList<RankedWord>>()
     @Volatile private var recentFuzzy:Pair<String,List<KeyPopFuzzyRanker.Match>>?=null
     private val scowlIndex by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
@@ -37,6 +41,13 @@ class KeyPopLexicon(context:Context) {
                     if(tier<=20 && word.length in 3..17) {
                         val gestureKey=""+word.first()+word.last()
                         glideIndex.getOrPut(gestureKey){ArrayList()}.add(item)
+                    }
+                    if(tier<=20 && word.length in 4..20 &&
+                        word.all{it in 'a'..'z'}) {
+                        for(gram in word.windowed(3).distinct()) {
+                            val bucket=middleGramIndex.getOrPut(gram){ArrayList()}
+                            if(bucket.size<320)bucket.add(item)
+                        }
                     }
                     if(tier<=20 && word.length in 3..16)for(i in word.indices) {
                         val key=word.removeRange(i,i+1)
@@ -112,6 +123,22 @@ class KeyPopLexicon(context:Context) {
         val fromDeletes=deletes.flatMap{deleteIndex[it].orEmpty().asSequence()}
         val fromBuckets=keys.asSequence()
             .flatMap{scowlIndex[it].orEmpty().asSequence()}
+        val gramVotes=HashMap<RankedWord,Int>()
+        if(input.length>=4) {
+            for(gram in input.windowed(3).distinct()) {
+                for(item in middleGramIndex[gram].orEmpty()) {
+                    if(kotlin.math.abs(item.word.length-input.length)<=2)
+                        gramVotes[item]=(gramVotes[item]?:0)+1
+                }
+            }
+        }
+        // Prefer candidates sharing multiple internal 3-grams; a single
+        // matching suffix ("ing") is not enough evidence for long words.
+        val fromGrams=gramVotes.entries.asSequence().filter {
+            it.value>=if(input.length>=6)2 else 1
+        }.sortedWith(compareByDescending<Map.Entry<RankedWord,Int>>{it.value}
+            .thenBy{it.key.tier}.thenBy{it.key.word.length})
+            .take(650).map{it.key}
         // Include curated contemporary common terms and product names missing
         // from frequency-tier dictionaries. Bounded on the prediction worker.
         val curated=KeyPopTypingIntelligence.list(0).asSequence()
@@ -119,7 +146,7 @@ class KeyPopLexicon(context:Context) {
                 kotlin.math.abs(it.length-input.length)<=2 &&
                 (it.first()==input.first() || it.take(2)==input.take(2))}
             .map{RankedWord(it,10)}
-        return (fromDeletes+fromBuckets+curated)
+        return (fromDeletes+fromGrams+fromBuckets+curated)
             .filter { it.tier<=35 &&
                 kotlin.math.abs(it.word.length-input.length)<=2 }
             .distinctBy{it.word}
@@ -267,7 +294,7 @@ class KeyPopLexicon(context:Context) {
             else fuzzy.take(3)+completions
         return (listOfNotNull(if(lang==0)
                 KeyPopContractionRules.correction(fragment) else null)+
-            (if(lang==0)
+            (if(lang==0 && !originalKnown)
                 KeyPopShortWordRecovery.suggestions(fragment,beforeCursor,4)
             else emptyList())+
             listOfNotNull(if(lang==0)digitSlipCorrection(fragment) else null)+
@@ -301,6 +328,7 @@ class KeyPopLexicon(context:Context) {
         if(lang!=0 || normalized.length !in 2..22)return null
         if(normalized in store.getStringSet("manual_0",emptySet()).orEmpty())return null
         KeyPopContractionRules.correction(word)?.let{return it}
+        if(isKnownEnglish(normalized))return null
         KeyPopShortWordRecovery.suggestions(normalized,beforeCursor).firstOrNull()
             ?.let{return it}
         digitSlipCorrection(normalized)?.let{return it}
