@@ -252,7 +252,7 @@ object KeyPopTypingIntelligence {
      * NOT forced replacement. Explicit high-confidence typos auto-correct. */
     fun correction(language:Int,typed:String,learned:Set<String> = emptySet()):String? {
         val word=normalized(typed)
-        if(language!=0 || word.length !in 3..32)return null
+        if(language!=0 || word.length !in 2..32)return null
         if(word in list(language))return null
         // A previously *passively learned* typo must not suppress a high-
         // confidence correction (an explicit personal dictionary entry will
