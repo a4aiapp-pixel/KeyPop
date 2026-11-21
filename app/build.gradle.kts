@@ -21,7 +21,7 @@ android {
         // RC42 stablev2 was built using a CI run counter. RC43 uses a much
         // higher floor to guarantee one-way in-place upgrade on Android.
         versionCode = 120000 + (System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 0)
-        versionName = "1.0.54-rc54-personal-context-quality"
+        versionName = "1.0.55-rc55-consolidated-intelligence-ux"
     }
     splits {
         abi {
@@ -44,7 +44,7 @@ android {
         debug {
             // Debug builds retain an ephemeral test-only signature and their
             // OWN app identity. Never distribute them as an upgrade path.
-            applicationIdSuffix = ".rc54preview"
+            applicationIdSuffix = ".rc55preview"
             versionNameSuffix = "-debug-test-only"
         }
         release {
