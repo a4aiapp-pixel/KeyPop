@@ -17,7 +17,7 @@ object KeyPopTypingIntelligence {
             "thank" to listOf("you"), "good" to listOf("morning","evening","night"),
             "see" to listOf("you"),"please" to listOf("confirm","review","send"),
             "can" to listOf("you","we"),"happy" to listOf("birthday"),
-            "looking" to listOf("forward"),"best" to listOf("regards"),
+            "looking" to listOf("forward"),"posted" to listOf("on","regarding","about"),"keep" to listOf("me","you","the"),"best" to listOf("regards"),
             "kind" to listOf("regards"),"how" to listOf("are","much"),
             "let" to listOf("me"),"i" to listOf("am","will","have"),
             "it" to listOf("is","was","will"),
