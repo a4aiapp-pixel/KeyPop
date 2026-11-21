@@ -36,6 +36,16 @@ jobs:
           KEYPOP_SIGNING_KEY_ALIAS: ${{ secrets.KEYPOP_SIGNING_KEY_ALIAS }}
           KEYPOP_SIGNING_KEY_PASSWORD: ${{ secrets.KEYPOP_SIGNING_KEY_PASSWORD }}
         run: gradle --no-daemon :app:testDebugUnitTest :app:assembleRelease
+      - name: Verify release signatures and install identity
+        run: |
+          set -euo pipefail
+          APK_DIR="app/build/outputs/apk/release"
+          APK_SIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)"
+          AAPT="$(find "$ANDROID_HOME/build-tools" -name aapt -type f | sort -V | tail -n 1)"
+          for apk in "$APK_DIR"/*.apk; do
+            "$APK_SIGNER" verify --verbose "$apk"
+            "$AAPT" dump badging "$apk" | grep -E "^package: name='com.aetherkeys.keyboard.stablev2' versionCode='[0-9]+' versionName='1.0.55-"
+          done
       - name: Verify ARM64 and universal packages
         run: |
           find app/build/outputs/apk/release -name '*.apk' -type f -print
